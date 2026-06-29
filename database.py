@@ -117,3 +117,17 @@ async def has_required_requisites(tg_id: int, direction: str) -> bool:
         return bool(card and card.strip()) and bool(piastrix and piastrix.strip())
         
     return False
+
+async def is_user_guarantor(tg_id: int) -> bool:
+    """
+    Вспомогательная функция безопасности.
+    Проверяет, имеет ли право пользователь модерировать сделку 
+    в качестве Гаранта (проверяет статус в БД).
+    """
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
+            res = await cursor.fetchone()
+            
+    if res and res == "guarantor_member":
+        return True
+    return False
