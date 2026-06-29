@@ -48,7 +48,7 @@ pip install -r requirements.txt
 ```
 
 3. Задайте обязательные переменные окружения в .env файле:
-   ```bash
+```bash
 touch .env
 chmod 777 .env
 nano .env
