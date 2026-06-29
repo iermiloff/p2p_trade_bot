@@ -9,6 +9,7 @@ from database import init_db, DB_NAME
 from ban_middleware import BanCheckMiddleware
 
 # Импортируем наши созданные функциональные модули
+import tasks
 import verification
 import cabinet
 import offers
@@ -150,7 +151,24 @@ async def main():
     dp.include_router(offers.router)
     dp.include_router(deals.router)
     
-    print("База данных проверена. Запуск пуллинга бота...")
+    async def main():
+    # Инициализируем структуру таблиц при запуске проекта
+    await init_db()
+    
+    # Подключаем защиту от забаненных пользователей на все типы входящих событий
+    dp.message.middleware(BanCheckMiddleware())
+    dp.callback_query.middleware(BanCheckMiddleware())
+    
+    # Подключаем роутеры всех наших модулей к главному диспетчеру
+    dp.include_router(verification.router)
+    dp.include_router(cabinet.router)
+    dp.include_router(offers.router)
+    dp.include_router(deals.router)
+    
+    # ЗАПУСКАЕМ АВТОМАТИЧЕСКИЙ ТАЙМЕР ОТМЕНЫ СДЕЛОК В ФОНЕ:
+    asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
+    
+    print("База данных проверена. Фоновые таймауты запущены. Запуск пуллинга бота...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
