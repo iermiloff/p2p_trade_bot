@@ -19,7 +19,7 @@ async def init_db():
                 rating REAL DEFAULT 5.0,
                 deals_count INTEGER DEFAULT 0,
                 is_banned INTEGER DEFAULT 0,       -- 1 = вечный бан, 0 = чист
-                ban_until INTEGER DEFAULT 0        -- Unix-время окончания временного бана
+                ban_until INTEGER DEFAULT 0,        -- Unix-время окончания временного бана
                 kyc_file_id TEXT DEFAULT NULL
             )''')
 
