@@ -209,8 +209,11 @@ async def admin_claim_deal(callback: types.CallbackQuery):
     await callback.message.edit_text(f"✅ Вы вошли в сделку #{deal_id} как официальный Гарант. Ваши сообщения в чате будут выделены.")
     
 # --- БЕЗОПАСНЫЙ АНОНИМНЫЙ ЧАТ (РЕТРАНСЛЯТОР С МАСКИРОВКОЙ) ---
-@router.message(F.text & ~F.text.startswith("/"))
-async def anonymous_chat_relay(message: types.Message, bot: Bot, state: str = None):
+from aiogram.filters import StateFilter
+
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
+async def anonymous_chat_relay(message: types.Message, bot: Bot):
+    # Весь внутренний код функции anonymous_chat_relay остается прежним!
     sender_id = message.from_user.id
     
     # ⚡ ВАЖНО: Если пользователь сейчас находится в процессе ввода FSM (например, пишет реквизиты),
