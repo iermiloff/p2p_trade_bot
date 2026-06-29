@@ -92,6 +92,7 @@ async def cmd_start(message: types.Message):
 # --- ПАНЕЛЬ МОДЕРАЦИИ: АДМИН-КОМАНДЫ БЛОКИРОВКИ ---
 @dp.message(lambda msg: msg.from_user.id in ADMIN_IDS)
 async def admin_ban_commands(message: types.Message):
+
     """Обработчик команд блокировки для администраторов"""
     text = message.text.strip()
     
@@ -161,26 +162,27 @@ async def main():
     dp.include_router(deals.router)
     
 async def main():
-    # Инициализируем структуру таблиц при запуске проекта
     await init_db()
     
-    # ⚡ ИСПРАВЛЕНО: Регистрируем Middleware как внутренний (внутренние слои не ломают FSM и команды)
     dp.message.middleware(BanCheckMiddleware())
     dp.callback_query.middleware(BanCheckMiddleware())
     
-    # Строгий порядок подключения роутеров (от легких к тяжелым)
-    dp.include_router(cabinet.router)       # 1. Личный кабинет (Реквизиты FSM)
-    dp.include_router(offers.router)        # 2. Торговый стакан заявок
-    dp.include_router(verification.router)  # 3. Верификация
-    dp.include_router(deals.router)         # 4. Сделки и Анонимный чат
+    dp.include_router(cabinet.router)
+    dp.include_router(offers.router)
+    dp.include_router(verification.router)
+    dp.include_router(deals.router)
     
-    # Запускаем автоматический таймер отмены сделок в фоне
+    import tasks
     asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
     
     print("Base checked. Background timers active. Starting polling...")
-    await dp.start_polling(bot)
     
-@dp.message(lambda msg: msg.text == "/debug")
+    # ⚡ СБРАСЫВАЕМ ВСЕ ЗАВИСШИЕ ОБНОВЛЕНИЯ И СЕССИИ TELEGRAM:
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+    
+@dp.message(Command("debug"))
 async def cmd_debug_db(message: types.Message):
     user_id = message.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
