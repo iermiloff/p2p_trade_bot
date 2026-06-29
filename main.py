@@ -2,6 +2,7 @@ import asyncio
 import random
 import time
 import aiosqlite
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from config import BOT_TOKEN, ADMIN_IDS
@@ -16,7 +17,7 @@ import offers
 import deals
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
 # Списки для генерации анонимных никнеймов контрагентов
 ADJECTIVES = ["Epic", "Brave", "Silent", "Golden", "Swift", "Mad", "Crazy", "Happy"]
