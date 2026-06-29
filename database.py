@@ -133,3 +133,15 @@ async def is_user_guarantor(tg_id: int) -> bool:
     if res and res == "guarantor_member":
         return True
     return False
+
+from constants import TITLES  # Добавьте этот импорт в самый верх database.py, если его там нет
+
+async def get_user_title(deals_count: int, rating: float) -> str:
+    """
+    Динамически вычисляет титул пользователя на основе количества 
+    успешных сделок и текущего рейтинга.
+    """
+    for title in TITLES:
+        if deals_count >= title["min_deals"] and rating >= title["min_rating"]:
+            return title["name"]
+    return "🥚 Новичок"
