@@ -178,6 +178,23 @@ async def main():
     
     print("База данных проверена. Фоновые таймауты запущены. Запуск пуллинга бота...")
     await dp.start_polling(bot)
+    
+@dp.message(lambda msg: msg.text == "/debug")
+async def cmd_debug_db(message: types.Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT * FROM users WHERE tg_id = ?", (user_id,)) as c1:
+            u_data = await c1.fetchone()
+        async with db.execute("SELECT * FROM requisites WHERE tg_id = ?", (user_id,)) as c2:
+            r_data = await c2.fetchone()
+            
+    text = (
+        f"🔍 **Отладочная информация:**\n\n"
+        f"Ваш ID: `{user_id}`\n"
+        f"Данные Users: `{u_data}`\n"
+        f"Данные Requisites: `{r_data}`"
+    )
+    await message.answer(text, parse_mode="Markdown")
 
 if __name__ == "__main__":
     asyncio.run(main())
