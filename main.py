@@ -51,7 +51,7 @@ async def cmd_start(message: types.Message):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT is_verified FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             res = await cursor.fetchone()
-            is_verified = res[0] if res else 0
+            is_verified = res if res else 0
 
     # Авто-верификация для администраторов при первом старте
     if tg_id in ADMIN_IDS and not is_verified:
@@ -61,6 +61,62 @@ async def cmd_start(message: types.Message):
         is_verified = 1
 
     if is_verified:
+        # ⚡ НАЧАЛО БЛОКА ВОССТАНОВЛЕНИЯ АКТИВНОЙ СДЕЛКИ
+        async with aiosqlite.connect(DB_NAME) as db:
+            # Ищем, нет ли у пользователя сделки в процессах оплаты или выдачи
+            query = """
+                SELECT id, status, buyer_id, seller_id, use_guarantor 
+                FROM deals 
+                WHERE (buyer_id = ? OR seller_id = ?) 
+                AND status IN ('waiting_payment', 'waiting_delivery', 'dispute')
+            """
+            async with db.execute(query, (tg_id, tg_id)) as cursor:
+                active_deal = await cursor.fetchone()
+
+        if active_deal:
+            deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
+            
+            # Динамически восстанавливаем нужные кнопки управления в зависимости от роли и статуса
+            kb = None
+            role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
+            
+            if status == 'waiting_payment' and tg_id == buyer_id:
+                # Покупатель еще не оплатил
+                btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")]
+                ])
+            elif status == 'waiting_delivery' and tg_id == seller_id:
+                # Продавец должен подтвердить получение и выпустить средства
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
+                    [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                ])
+            elif status == 'waiting_delivery' and tg_id == buyer_id:
+                # Покупатель ждет, даем ему кнопку вызова спора на случай форс-мажора
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                ])
+
+            status_labels = {
+                'waiting_payment': 'Ожидание оплаты от Покупателя',
+                'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
+                'dispute': 'Внештатная ситуация (Открыт спор)'
+            }
+
+            await message.answer(
+                f"🔄 **Вы вернулись в активную сделку #{deal_id}!**\n\n"
+                f"👤 Ваша роль: **{role_text}**\n"
+                f"📊 Текущий статус: _{status_labels.get(status, status)}_\n"
+                f"💬 Анонимный чат по-прежнему активен. Вы можете общаться с контрагентом напрямую.\n\n"
+                f"Если кнопки управления пропали, используйте панель ниже:",
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+            return # ⚡ ВАЖНО: Прерываем выполнение, чтобы не показывать Главное меню во время сделки
+        # ⚡ КОНЕЦ БЛОКА ВОССТАНОВЛЕНИЯ
+
+        # Если активных сделок нет — показываем обычное Главное Меню
         await message.answer(
             f"Добро пожаловать обратно, **{nickname}**!\nВы можете использовать P2P-обмен. Выберите нужный раздел:",
             reply_markup=cabinet.get_main_keyboard()
@@ -73,6 +129,7 @@ async def cmd_start(message: types.Message):
             f"Привет! Твой анонимный никнейм: **{nickname}**.\n\nДля безопасности сделки доступны после верификации.",
             reply_markup=kb
         )
+
 
 # --- ПАНЕЛЬ ДИАГНОСТИКИ (ТЕПЕРЬ НА ВЫДЕЛЕННОМ РОУТЕРЕ) ---
 @admin_router.message(Command("debug"))
