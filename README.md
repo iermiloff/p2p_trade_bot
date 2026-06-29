@@ -88,7 +88,8 @@ Restart=always
 
 [Install]
 WantedBy=multi-user.target
-
+```
+5. Активируйте и запустите службу:
 ```bash
 systemctl daemon-reload
 systemctl enable p2pbot
