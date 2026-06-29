@@ -1,11 +1,14 @@
 import asyncio
 import random
 import aiosqlite
-import verification
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from config import BOT_TOKEN
 from database import init_db, DB_NAME
+
+# Импортируем наши созданные модули
+import verification
+import cabinet
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -13,16 +16,7 @@ dp = Dispatcher()
 # Списки для генерации анонимных никнеймов контрагентов
 ADJECTIVES = ["Epic", "Brave", "Silent", "Golden", "Swift", "Mad", "Crazy", "Happy"]
 NOUNS = ["Whale", "Punk", "Trader", "Shark", "Phoenix", "Falcon", "Tiger", "Bear"]
-async def main():
-    # Инициализируем структуру таблиц при запуске проекта
-    await init_db()
-    
-    # ПОДКЛЮЧАЕМ НАШ НОВЫЙ РОУТЕР СЮДА:
-    dp.include_router(verification.router)
-    
-    print("База данных проверена. Запуск пуллинга бота...")
-    await dp.start_polling(bot)
-    
+
 async def register_user_safely(tg_id: int) -> str:
     """
     Атомарная регистрация пользователя с гарантией уникальности никнейма.
@@ -33,7 +27,7 @@ async def register_user_safely(tg_id: int) -> str:
         async with db.execute("SELECT nickname FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             user = await cursor.fetchone()
             if user:
-                return user[0]
+                return user[0]  # Возвращаем уже существующий никнейм
 
         # Если пользователя нет, генерируем уникальный ник в цикле
         while True:
@@ -46,7 +40,7 @@ async def register_user_safely(tg_id: int) -> str:
                 return nickname
             except aiosqlite.IntegrityError:
                 # Никнейм перехватил другой поток/пользователь миллисекундой ранее.
-                # Транзакция откатилась, уходим на новую итерацию генерации.
+                # Транзакция автоматически откатилась, уходим на новую итерацию генерации.
                 continue
 
 @dp.message(CommandStart())
@@ -56,20 +50,21 @@ async def cmd_start(message: types.Message):
     # Безопасно регистрируем и получаем постоянный анонимный ник
     nickname = await register_user_safely(tg_id)
     
-    # Проверяем текущий статус верификации
+    # Проверяем текущий статус верификации в базе данных
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT is_verified FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             res = await cursor.fetchone()
             is_verified = res[0] if res else 0
 
     if is_verified:
+        # Если верифицирован — отправляем красивое Главное Меню
         await message.answer(
             f"Добро пожаловать обратно, **{nickname}**!\n"
-            f"Вы верифицированы и можете использовать P2P-обмен."
+            f"Вы верифицированы и можете использовать P2P-обмен. Выберите нужный раздел:",
+            reply_markup=cabinet.get_main_keyboard()
         )
     else:
-        # Для неверифицированных пользователей доступна только кнопка верификации
-        # Логику отправки заявки админам мы привяжем к этой кнопке на следующем шаге
+        # Для неверифицированных пользователей доступна только одна кнопка
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="🛡 Пройти верификацию", callback_data="start_verification")]
         ])
@@ -83,6 +78,11 @@ async def cmd_start(message: types.Message):
 async def main():
     # Инициализируем структуру таблиц при запуске проекта
     await init_db()
+    
+    # Подключаем роутеры наших модулей к главному диспетчеру
+    dp.include_router(verification.router)
+    dp.include_router(cabinet.router)
+    
     print("База данных проверена. Запуск пуллинга бота...")
     await dp.start_polling(bot)
 
