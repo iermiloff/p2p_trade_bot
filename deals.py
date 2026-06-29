@@ -226,21 +226,21 @@ async def admin_claim_deal(callback: types.CallbackQuery):
         
     await callback.message.edit_text(f"✅ Вы вошли в сделку #{deal_id} как официальный Гарант. Ваши сообщения в чате будут выделены.")
     
-# --- БЕЗОПАСНЫЙ АНОНИМНЫЙ ЧАТ (РЕТРАНСЛЯТОР С МАСКИРОВКОЙ) ---
-from aiogram.filters import StateFilter
-
-# Явно указываем, что чат работает только когда у пользователя НЕТ активных состояний FSM
-@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
-async def anonymous_chat_relay(message: types.Message, bot: Bot):
-
+# --- БЕЗОПАСНЫЙ АНОНИМНЫЙ ЧАТ (РЕТРАНСЛЯТОР С МАСКИРОВКОЙ ТЕКСТА И ФОТО) ---
+# Меняем фильтр в декораторе: теперь ловим и текст (F.text), и фотографии (F.photo)
+@router.message((F.text | F.photo) & ~F.text.startswith("/"))
+async def anonymous_chat_relay(message: types.Message, bot: Bot, state: FSMContext = None):
     sender_id = message.from_user.id
     
-    # ⚡ ВАЖНО: Если пользователь сейчас находится в процессе ввода FSM (например, пишет реквизиты),
-    # мы принудительно игнорируем этот хэндлер чата и передаем управление дальше!
+    # ⚡ ЗАЩИТА ЛК: Если пользователь сейчас вводит карту или кошелек,
+    # мы мгновенно выходим и даем сработать хэндлерам Личного Кабинета!
     if state is not None:
-        return
-        
+        current_state = await state.get_state()
+        if current_state and "waiting_for_" in current_state:
+            return
+            
     async with aiosqlite.connect(DB_NAME) as db:
+        # Ищем активную сделку, где участвует этот пользователь
         query = """
             SELECT id, buyer_id, seller_id, guarantor_id, status FROM deals 
             WHERE (buyer_id = ? OR seller_id = ? OR guarantor_id = ?) 
@@ -250,29 +250,28 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot):
             active_deal = await cursor.fetchone()
             
     if not active_deal:
-        # ⚡ ВАЖНО: Если у пользователя нет активной сделки, мы возвращаем специальный флаг,
-        # чтобы aiogram передал это текстовое сообщение другим роутерам (например, в кабинет)
-        return
+        return # Если у пользователя нет активной сделки — просто игнорируем
 
     deal_id, buyer_id, seller_id, guarantor_id, status = active_deal
     
+    # Достаем анонимные никнеймы участников из базы данных для подстановки
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT tg_id, nickname FROM users WHERE tg_id IN (?, ?)", (buyer_id, seller_id)) as cursor:
             users_nicks = await cursor.fetchall()
             
     nicks_dict = {uid: name for uid, name in users_nicks}
     
+    # Определяем, кто пишет, и формируем защищенный префикс
     if sender_id == guarantor_id:
-        prefix = f"⚡ **ГАРАНТ (Admin)]**:"
+        prefix = f"⚡ **[ГАРАНТ (Admin)]**"
     elif sender_id == buyer_id:
-        prefix = f"👤 **[{nicks_dict.get(buyer_id, 'Покупатель')}]**:"
+        prefix = f"👤 **[{nicks_dict.get(buyer_id, 'Покупатель')}]**"
     elif sender_id == seller_id:
-        prefix = f"👤 **[{nicks_dict.get(seller_id, 'Продавец')}]**:"
+        prefix = f"👤 **[{nicks_dict.get(seller_id, 'Продавец')}]**"
     else:
         return
 
-    full_message_text = f"{prefix} {message.text}"
-    
+    # Формируем список получателей (отправляем всем, кроме самого себя)
     targets = [buyer_id, seller_id]
     if guarantor_id:
         targets.append(guarantor_id)
@@ -280,7 +279,29 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot):
     for target_id in targets:
         if target_id and target_id != sender_id:
             try:
-                await bot.send_message(chat_id=target_id, text=full_message_text, parse_mode="Markdown")
-            except Exception:
+                # 📸 ВЕТКА А: Пользователь отправил КАРТИНКУ (ЧЕК)
+                if message.photo:
+                    # Берем самое лучшее качество фото (последний элемент в списке)
+                    photo_id = message.photo[-1].file_id
+                    # Текст подписи под фото (если пользователь что-то написал вместе с фото, добавляем это)
+                    user_caption = f"\n📝 {message.caption}" if message.caption else ""
+                    full_caption = f"{prefix} отправил фото:{user_caption}"
+                    
+                    await bot.send_photo(
+                        chat_id=target_id, 
+                        photo=photo_id, 
+                        caption=full_caption, 
+                        parse_mode="Markdown"
+                    )
+                
+                # 💬 ВЕТКА Б: Пользователь отправил ОБЫЧНЫЙ ТЕКСТ
+                elif message.text:
+                    full_message_text = f"{prefix}: {message.text}"
+                    await bot.send_message(
+                        chat_id=target_id, 
+                        text=full_message_text, 
+                        parse_mode="Markdown"
+                    )
+            except Exception as e:
+                print(f"[ОШИБКА РЕТРАНСЛЯЦИИ ЧАТА СДЕЛКИ #{deal_id}]: {e}")
                 continue
-
