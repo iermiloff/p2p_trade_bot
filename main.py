@@ -151,7 +151,7 @@ async def main():
     dp.include_router(offers.router)
     dp.include_router(deals.router)
     
-    async def main():
+async def main():
     # Инициализируем структуру таблиц при запуске проекта
     await init_db()
     
