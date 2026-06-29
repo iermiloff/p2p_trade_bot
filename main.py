@@ -9,6 +9,7 @@ from database import init_db, DB_NAME
 # Импортируем наши созданные модули
 import verification
 import cabinet
+import offers
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -82,6 +83,7 @@ async def main():
     # Подключаем роутеры наших модулей к главному диспетчеру
     dp.include_router(verification.router)
     dp.include_router(cabinet.router)
+    dp.include_router(offers.router)
     
     print("База данных проверена. Запуск пуллинга бота...")
     await dp.start_polling(bot)
