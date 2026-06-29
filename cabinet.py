@@ -118,13 +118,15 @@ async def edit_card_start(callback: types.CallbackQuery, state: FSMContext):
 async def edit_card_save(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
-    await state.clear() # Срочно сбрасываем состояние FSM, чтобы бот снова реагировал на кнопки
+    await state.clear() # Сбрасываем FSM
     
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE requisites SET card = ? WHERE tg_id = ?", (text, user_id))
-        await db.commit() # Явный коммит транзакции в SQLite
+        await db.commit() # Фиксируем в БД
         
-    await message.answer("✅ Реквизиты банковской карты успешно сохранены!")
+    # Отправляем новое сообщение-подтверждение
+    await message.answer("✅ Реквизиты банковской карты успешно зафиксированы в системе!")
+    # Перерисовываем меню реквизитов, чтобы пользователь сразу увидел изменения
     await render_requisites(message, user_id)
 
 # 2. PIASTRIX
@@ -144,7 +146,7 @@ async def edit_piastrix_save(message: types.Message, state: FSMContext):
         await db.execute("UPDATE requisites SET piastrix = ? WHERE tg_id = ?", (text, user_id))
         await db.commit()
         
-    await message.answer("✅ Реквизиты Piastrix успешно сохранены!")
+    await message.answer("✅ Реквизиты кошелька Piastrix успешно зафиксированы в системе!")
     await render_requisites(message, user_id)
 
 # 3. TON / GRAM
@@ -152,7 +154,7 @@ async def edit_piastrix_save(message: types.Message, state: FSMContext):
 async def edit_ton_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(RequisitesStates.waiting_for_ton)
-    await callback.message.answer("💎 **Ввод TON:**\nПришлите ваш TON-адрес (EQ... / UQ...) и Memo через пробел (если Memo нужен для биржи):")
+    await callback.message.answer("💎 **Ввод TON:**\nПришлите ваш TON-адрес (EQ... / UQ...) и Memo через пробел (если Memo нужен):")
 
 @router.message(RequisitesStates.waiting_for_ton)
 async def edit_ton_save(message: types.Message, state: FSMContext):
@@ -164,5 +166,5 @@ async def edit_ton_save(message: types.Message, state: FSMContext):
         await db.execute("UPDATE requisites SET ton = ? WHERE tg_id = ?", (text, user_id))
         await db.commit()
         
-    await message.answer("✅ Реквизиты TON (GRAM) успешно сохранены!")
+    await message.answer("✅ Реквизиты TON (GRAM) успешно зафиксированы в системе!")
     await render_requisites(message, user_id)
