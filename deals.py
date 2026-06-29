@@ -2,7 +2,7 @@ import aiosqlite
 import time
 from aiogram import Router, F, types, Bot
 from config import ADMIN_IDS
-from database import DB_NAME, has_active_deal
+from database import DB_NAME, has_active_deal, has_required_requisites
 
 router = Router()
 
