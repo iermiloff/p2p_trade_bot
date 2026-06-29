@@ -101,7 +101,6 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
                 )
             except Exception:
                 continue
-# --- ПОДТВЕРЖДЕНИЕ ПРОДАВЦОМ И ПЕРЕХОД К ОПЛАТЕ (ТАЙМЕРЫ 2 И 3) ---
 @router.callback_query(F.data.startswith("deal_action_"))
 async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
@@ -134,30 +133,48 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не указано")
             b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
             
-            kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🟩 Я перевел средства", callback_data=f"deal_action_paid_{deal_id}")]
-            ])
-            
-            # Уведомляем покупателя и передаем ему реквизиты продавца
-            await bot.send_message(
-                chat_id=buyer_id,
-                text=f"✅ Продавец подтвердил сделку #{deal_id}!\n"
-                     f"💬 **Анонимный чат открыт.** Все сообщения, отправленные сюда, увидит контрагент.\n\n"
-                     f"📋 **Реквизиты продавца для оплаты:**\n"
-                     f"💳 Карты: `{s_card}`\n📱 Piastrix: `{s_pias}`\n💎 TON: `{s_ton}`\n\n"
-                     f"⏳ Запущен **Таймер 2 (10 минут)** на оплату. После перевода нажмите кнопку ниже:",
-                reply_markup=kb_buyer
-            )
-            
-            # Уведомляем продавца
-            await bot.send_message(
-                chat_id=seller_id,
-                text=f"🤝 Вы подтвердили сделку #{deal_id}.\n"
-                     f"💬 **Анонимный чат открыт.**\n"
-                     f"Реквизиты покупателя на случай встречной отправки:\n"
-                     f"💳 Карты: `{b_card}` | 📱 Piastrix: `{b_pias}` | 💎 TON: `{b_ton}`\n\n"
-                     f"Ожидайте, пока покупатель совершит перевод и нажмет кнопку оплаты."
-            )
+            # ⚡ РАЗВЕТВЛЕНИЕ А: СДЕЛКА С ГАРАНТОМ
+            if use_guarantor == 1:
+                # Полностью скрываем личные реквизиты продавца
+                await bot.send_message(
+                    chat_id=buyer_id,
+                    text=f"🛡️ **Сделка #{deal_id} принята продавцом БЕЗОПАСНО (ЧЕРЕЗ ГАРАНТА)!**\n"
+                         f"💬 Анонимный чат открыт.\n\n"
+                         f"⚠️ **ВАЖНО:** Пожалуйста, **НЕ ПЕРЕВОДИТЕ** средства продавцу напрямую!\n"
+                         f"Дождитесь, пока Администратор-Гарант войдет в этот чат и предоставит официальные реквизиты платформы для удержания средств."
+                )
+                
+                await bot.send_message(
+                    chat_id=seller_id,
+                    text=f"🛡️ **Сделка #{deal_id} открыта ЧЕРЕЗ ГАРАНТА!**\n"
+                         f"💬 Анонимный чат открыт.\n\n"
+                         f"Ожидайте подключения Администратора-Гаранта. Он напишет реквизиты для заморозки вашей части обмена."
+                )
+                
+            # 🟢 РАЗВЕТВЛЕНИЕ Б: ОБЫЧНАЯ ПРЯМАЯ СДЕЛКА
+            else:
+                kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🟩 Я перевел средства", callback_data=f"deal_action_paid_{deal_id}")]
+                ])
+                
+                await bot.send_message(
+                    chat_id=buyer_id,
+                    text=f"✅ Продавец подтвердил прямую сделку #{deal_id}!\n"
+                         f"💬 **Анонимный чат открыт.**\n\n"
+                         f"📋 **Реквизиты продавца для оплаты:**\n"
+                         f"💳 Карты: `{s_card}`\n📱 Piastrix: `{s_pias}`\n💎 TON: `{s_ton}`\n\n"
+                         f"⏳ Запущен **Таймер 2 (10 минут)** на оплату. После перевода нажмите кнопку ниже:",
+                    reply_markup=kb_buyer
+                )
+                
+                await bot.send_message(
+                    chat_id=seller_id,
+                    text=f"🤝 Вы подтвердили прямую сделку #{deal_id}.\n"
+                         f"💬 **Анонимный чат открыт.**\n\n"
+                         f"Реквизиты покупателя на случай встречной отправки:\n"
+                         f"💳 Карты: `{b_card}` | 📱 Piastrix: `{b_pias}` | 💎 TON: `{b_ton}`\n\n"
+                         f"Ожидайте, пока покупатель совершит перевод."
+                )
 
         # --- Действие: Продавец отклонил сделку ---
         elif action == "reject" and user_id == seller_id and status == "waiting_seller":
@@ -212,6 +229,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                     await bot.send_message(chat_id=admin_id, text=f"⚠️ **ВНИМАНИЕ! Открыт спор (Диспут) по сделке #{deal_id}!** Требуется вмешательство.")
                 except Exception:
                     continue
+                    
 # --- ВХОД АДМИНИСТРАТОРА В КАЧЕСТВЕ ГАРАНТА ---
 @router.callback_query(F.data.startswith("admin_claim_deal_"))
 async def admin_claim_deal(callback: types.CallbackQuery):
