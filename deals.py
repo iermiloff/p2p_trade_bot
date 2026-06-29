@@ -11,12 +11,28 @@ router = Router()
 async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
     buyer_id = callback.from_user.id
     
-    # Разбираем callback: deal_open_[direct/guarantor]_[offer_id]
     parts = callback.data.split("_")
-    mode = parts[2]          # 'direct' или 'guarantor'
-    offer_id = int(parts[3])
+    mode = parts          # 'direct' или 'guarantor'
+    offer_id = int(parts)
     
-    # 🛡️ ЗАЩИТА 1: У покупателя не должно быть других активных сделок в моменте
+    # 🛡️ СВЕРХНОВАЯ ЗАЩИТА: Проверяем, заполнил ли ПОКУПАТЕЛЬ реквизиты для этого направления
+    # Сначала узнаем направление (direction) из самого объявления
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT direction FROM offers WHERE id = ?", (offer_id,)) as cursor:
+            res_dir = await cursor.fetchone()
+            
+    if res_dir:
+        direction = res_dir[0]
+        # Проверяем платежные данные покупателя для этого типа обмена
+        if not await has_required_requisites(buyer_id, direction):
+            await callback.answer(
+                "⚠️ Отказано в сделке!\n\n"
+                "Вы не можете принять это объявление, пока сами не заполните свои реквизиты для данного направления в Личном Кабинете.",
+                show_alert=True
+            )
+            return
+
+    # 🛡️ ЗАЩИТА 1: У покупателя не должно быть других активных сделок (этот код уже был)
     if await has_active_deal(buyer_id):
         await callback.answer("⚠️ Вы не можете открыть новую сделку, пока не завершите или не отмените текущую!", show_alert=True)
         return
