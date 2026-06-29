@@ -2,187 +2,80 @@ import asyncio
 import random
 import time
 import aiosqlite
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, Router
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN, ADMIN_IDS
 from database import init_db, DB_NAME
 from ban_middleware import BanCheckMiddleware
 
-# Импортируем наши созданные функциональные модули
-import tasks
+# Импортируем наши функциональные модули
 import verification
 import cabinet
 import offers
 import deals
 
+# Инициализируем бота и Диспетчер
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Списки для генерации анонимных никнеймов контрагентов
+# ⚡ СОЗДАЕМ ВЫДЕЛЕННЫЙ РОУТЕР ДЛЯ АДМИН-КОМАНД И ДИАГНОСТИКИ
+admin_router = Router()
+
 ADJECTIVES = ["Epic", "Brave", "Silent", "Golden", "Swift", "Mad", "Crazy", "Happy"]
 NOUNS = ["Whale", "Punk", "Trader", "Shark", "Phoenix", "Falcon", "Tiger", "Bear"]
 
 async def register_user_safely(tg_id: int) -> str:
-    """
-    Атомарная регистрация пользователя с гарантией уникальности никнейма.
-    Защищает от уязвимости параллельных запросов (Race Condition).
-    """
+    """Атомарная регистрация пользователя с гарантией уникальности никнейма"""
     async with aiosqlite.connect(DB_NAME) as db:
-        # Проверяем, существует ли уже пользователь в системе
         async with db.execute("SELECT nickname FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             user = await cursor.fetchone()
             if user:
-                return user[0]  # Возвращаем уже существующий никнейм
+                return user[0]
 
-        # Если пользователя нет, генерируем уникальный ник в цикле
         while True:
             nickname = f"{random.choice(ADJECTIVES)} {random.choice(NOUNS)}"
             try:
-                # Попытка записи. Если никнейм занят, сработает UNIQUE constraint базы данных
                 await db.execute("INSERT INTO users (tg_id, nickname) VALUES (?, ?)", (tg_id, nickname))
                 await db.execute("INSERT INTO requisites (tg_id) VALUES (?)", (tg_id,))
                 await db.commit()
                 return nickname
             except aiosqlite.IntegrityError:
-                # Никнейм перехватил другой поток/пользователь миллисекундой ранее.
-                # Транзакция автоматически откатилась, уходим на новую итерацию генерации.
                 continue
-@dp.message(CommandStart())
+
+@admin_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     tg_id = message.from_user.id
-    
-    # Безопасно регистрируем и получаем постоянный анонимный ник
     nickname = await register_user_safely(tg_id)
     
-    # Проверяем текущий статус верификации в базе данных
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT is_verified FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             res = await cursor.fetchone()
             is_verified = res[0] if res else 0
 
-    # ⚡ ДОБАВЛЯЕМ АВТО-ВЕРИФИКАЦИЮ ДЛЯ АДМИНИСТРАТОРОВ:
-    if tg_id in ADMIN_IDS:
-        if not is_verified:
-            # Автоматически проставляем статус верификации в БД, если админ зашел впервые
-            async with aiosqlite.connect(DB_NAME) as db:
-                await db.execute("UPDATE users SET is_verified = 1, user_status = 'super_trader' WHERE tg_id = ?", (tg_id,))
-                await db.commit()
-            is_verified = 1
+    # Авто-верификация для администраторов при первом старте
+    if tg_id in ADMIN_IDS and not is_verified:
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_verified = 1, user_status = 'super_trader' WHERE tg_id = ?", (tg_id,))
+            await db.commit()
+        is_verified = 1
 
     if is_verified:
-        # Если верифицирован (или это админ) — отправляем красивое Главное Меню
         await message.answer(
-            f"Добро пожаловать обратно, **{nickname}**!\n"
-            f"Вы верифицированы и можете использовать P2P-обмен. Выберите нужный раздел:",
+            f"Добро пожаловать обратно, **{nickname}**!\nВы можете использовать P2P-обмен. Выберите нужный раздел:",
             reply_markup=cabinet.get_main_keyboard()
         )
     else:
-        # Для неверифицированных пользователей доступна только одна кнопка
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="🛡 Пройти верификацию", callback_data="start_verification")]
         ])
         await message.answer(
-            f"Привет! Твой анонимный никнейм в системе: **{nickname}**.\n\n"
-            f"Для безопасности участников, все сделки доступны только после ручной проверки администратором.\n"
-            f"Нажмите на кнопку ниже, чтобы отправить заявку на верификацию.",
+            f"Привет! Твой анонимный никнейм: **{nickname}**.\n\nДля безопасности сделки доступны после верификации.",
             reply_markup=kb
         )
 
-# --- ПАНЕЛЬ МОДЕРАЦИИ: АДМИН-КОМАНДЫ БЛОКИРОВКИ ---
-@dp.message(lambda msg: msg.from_user.id in ADMIN_IDS)
-async def admin_ban_commands(message: types.Message):
-
-    """Обработчик команд блокировки для администраторов"""
-    text = message.text.strip()
-    
-    # 🛑 КОМАНДА 1: Вечный бан. Формат: /permban [tg_id]
-    if text.startswith("/permban"):
-        args = text.split()
-        if len(args) < 2 or not args[1].isdigit():
-            await message.answer("⚠ Использование: `/permban [tg_id]`")
-            return
-        target_id = int(args[1])
-        
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET is_banned = 1 WHERE tg_id = ?", (target_id,))
-            await db.commit()
-        await message.answer(f"⛔ Пользователь `{target_id}` забанен **НАВСЕГДА** за попытку скама.")
-        try:
-            await bot.send_message(target_id, "❌ Вы были навсегда заблокированы в боте администрацией.")
-        except Exception: pass
-
-    # ⏳ КОМАНДА 2: Временный бан. Формат: /tempban [tg_id] [минуты]
-    elif text.startswith("/tempban"):
-        args = text.split()
-        if len(args) < 3 or not args[1].isdigit() or not args[2].isdigit():
-            await message.answer("⚠ Использование: `/tempban [tg_id] [минуты]`")
-            return
-        target_id = int(args[1])
-        minutes = int(args[2])
-        
-        ban_timestamp = int(time.time()) + (minutes * 60)
-        
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET ban_until = ? WHERE tg_id = ?", (ban_timestamp, target_id))
-            await db.commit()
-        await message.answer(f"⏳ Пользователь `{target_id}` временно заблокирован на `{minutes}` минут.")
-        try:
-            await bot.send_message(target_id, f"⏳ Вы временно заблокированы на {minutes} минут на время разбирательства.")
-        except Exception: pass
-
-    # 🔓 КОМАНДА 3: Разбан. Формат: /unban [tg_id]
-    elif text.startswith("/unban"):
-        args = text.split()
-        if len(args) < 2 or not args[1].isdigit():
-            await message.answer("⚠ Использование: `/unban [tg_id]`")
-            return
-        target_id = int(args[1])
-        
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET is_banned = 0, ban_until = 0 WHERE tg_id = ?", (target_id,))
-            await db.commit()
-        await message.answer(f"✅ Пользователь `{target_id}` полностью разблокирован.")
-        try:
-            await bot.send_message(target_id, "🎉 Ограничения с вашего аккаунта сняты. Вы снова можете использовать бота.")
-        except Exception: pass
-
-async def main():
-    # Инициализируем структуру таблиц при запуске проекта
-    await init_db()
-    
-    # Подключаем защиту от забаненных пользователей на все типы входящих событий
-    dp.message.middleware(BanCheckMiddleware())
-    dp.callback_query.middleware(BanCheckMiddleware())
-    
-    # Подключаем роутеры всех наших модулей к главному диспетчеру
-    dp.include_router(verification.router)
-    dp.include_router(cabinet.router)
-    dp.include_router(offers.router)
-    dp.include_router(deals.router)
-    
-async def main():
-    await init_db()
-    
-    dp.message.middleware(BanCheckMiddleware())
-    dp.callback_query.middleware(BanCheckMiddleware())
-    
-    dp.include_router(cabinet.router)
-    dp.include_router(offers.router)
-    dp.include_router(verification.router)
-    dp.include_router(deals.router)
-    
-    import tasks
-    asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
-    
-    print("Base checked. Background timers active. Starting polling...")
-    
-    # ⚡ СБРАСЫВАЕМ ВСЕ ЗАВИСШИЕ ОБНОВЛЕНИЯ И СЕССИИ TELEGRAM:
-    await bot.delete_webhook(drop_pending_updates=True)
-    
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-    
-@dp.message(Command("debug"))
+# --- ПАНЕЛЬ ДИАГНОСТИКИ (ТЕПЕРЬ НА ВЫДЕЛЕННОМ РОУТЕРЕ) ---
+@admin_router.message(Command("debug"))
 async def cmd_debug_db(message: types.Message):
     user_id = message.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
@@ -192,12 +85,77 @@ async def cmd_debug_db(message: types.Message):
             r_data = await c2.fetchone()
             
     text = (
-        f"🔍 **Отладочная информация:**\n\n"
-        f"Ваш ID: `{user_id}`\n"
-        f"Данные Users: `{u_data}`\n"
-        f"Данные Requisites: `{r_data}`"
+        f"🔍 **Диагностика базы данных:**\n\n"
+        f"Ваш Telegram ID: `{user_id}`\n"
+        f"Запись в Users: `{u_data}`\n"
+        f"Запись в Requisites: `{r_data}`"
     )
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text)
+
+# --- ПАНЕЛЬ МОДЕРАЦИИ (НА ВЫДЕЛЕННОМ РОУТЕРЕ) ---
+@admin_router.message(lambda msg: msg.from_user.id in ADMIN_IDS and msg.text and msg.text.startswith("/"))
+async def admin_ban_commands(message: types.Message):
+    text = message.text.strip()
+    
+    if text.startswith("/permban"):
+        args = text.split()
+        if len(args) < 2 or not args[1].isdigit():
+            await message.answer("⚠ Использование: `/permban [tg_id]`")
+            return
+        target_id = int(args[1])
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_banned = 1 WHERE tg_id = ?", (target_id,))
+            await db.commit()
+        await message.answer(f"⛔ Пользователь `{target_id}` забанен НАВСЕГДА.")
+
+    elif text.startswith("/tempban"):
+        args = text.split()
+        if len(args) < 3 or not args[1].isdigit() or not args[2].isdigit():
+            await message.answer("⚠ Использование: `/tempban [tg_id] [минуты]`")
+            return
+        target_id = int(args[1])
+        minutes = int(args[2])
+        ban_timestamp = int(time.time()) + (minutes * 60)
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET ban_until = ? WHERE tg_id = ?", (ban_timestamp, target_id))
+            await db.commit()
+        await message.answer(f"⏳ Пользователь `{target_id}` заблокирован на `{minutes}` минут.")
+
+    elif text.startswith("/unban"):
+        args = text.split()
+        if len(args) < 2 or not args[1].isdigit():
+            await message.answer("⚠ Использование: `/unban [tg_id]`")
+            return
+        target_id = int(args[1])
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_banned = 0, ban_until = 0 WHERE tg_id = ?", (target_id,))
+            await db.commit()
+        await message.answer(f"✅ Пользователь `{target_id}` полностью разблокирован.")
+
+async def main():
+    await init_db()
+    
+    # Регистрируем Middleware модерации (внутренний слой)
+    dp.message.middleware(BanCheckMiddleware())
+    dp.callback_query.middleware(BanCheckMiddleware())
+    
+    # ⚡ ВАЖНО: Подключаем админский роутер самым ПЕРВЫМ, чтобы команды перехватывались до чатов
+    dp.include_router(admin_router)
+    dp.include_router(cabinet.router)
+    dp.include_router(offers.router)
+    dp.include_router(verification.router)
+    dp.include_router(deals.router)
+    
+    # Запускаем фоновый таймер таймаутов
+    import tasks
+    asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
+    
+    print("Base checked. Background timers active. Starting polling...")
+    
+    # Сбрасываем кэш зависших апдейтов
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
     asyncio.run(main())
