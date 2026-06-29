@@ -232,18 +232,70 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                     
 # --- ВХОД АДМИНИСТРАТОРА В КАЧЕСТВЕ ГАРАНТА ---
 @router.callback_query(F.data.startswith("admin_claim_deal_"))
-async def admin_claim_deal(callback: types.CallbackQuery):
+async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
+    await callback.answer()
+    
     admin_id = callback.from_user.id
     if admin_id not in ADMIN_IDS:
         return
         
-    deal_id = int(callback.data.replace("admin_claim_deal_", ""))
+    deal_id = int(callback.data.split("_")[3])
     
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE deals SET guarantor_id = ? WHERE id = ?", (admin_id, deal_id))
+        
+        # Получаем ID покупателя и продавца
+        async with db.execute("SELECT buyer_id, seller_id FROM deals WHERE id = ?", (deal_id,)) as cursor:
+            buyer_id, seller_id = await cursor.fetchone()
+            
+        # ⚡ НАХОДИМ РЕКВИЗИТЫ ОБОИХ УЧАСТНИКОВ ДЛЯ АДМИНИСТРАТОРА
+        async with db.execute("SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", (buyer_id,)) as b_cur:
+            b_req = await b_cur.fetchone()
+        async with db.execute("SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", (seller_id,)) as s_cur:
+            s_req = await s_cur.fetchone()
+            
         await db.commit()
         
-    await callback.message.edit_text(f"✅ Вы вошли в сделку #{deal_id} как официальный Гарант. Ваши сообщения в чате будут выделены.")
+    # Форматируем реквизиты (если пусто — пишем заглушку)
+    b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
+    s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не указано")
+        
+    # Создаем кнопки управления для Администратора-Гаранта
+    kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
+        [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")]
+    ])
+        
+    # Выводим админу пульт управления и ПОЛНЫЕ данные сделки
+    await callback.message.edit_text(
+        f"✅ Вы вошли в сделку #{deal_id} как официальный Гарант.\n"
+        f"💬 Напишите свои реквизиты в анонимный чат для депонирования.\n\n"
+        f"📋 **ДАННЫЕ ДЛЯ ПРОВЕРКИ ЧЕКОВ:**\n\n"
+        f"👤 **Покупатель (ID: `{buyer_id}`):**\n"
+        f"• Карты: `{b_card}`\n• Piastrix: `{b_pias}`\n• TON: `{b_ton}`\n\n"
+        f"👤 **Продавец (ID: `{seller_id}`):**\n"
+        f"• Карты: `{s_card}`\n• Piastrix: `{s_pias}`\n• TON: `{s_ton}`\n\n"
+        f"Используйте кнопки ниже для ручного закрытия/отмены сделки:",
+        reply_markup=kb_admin_control,
+        parse_mode="Markdown"
+    )
+    
+    # Кнопка подтверждения перевода для покупателя
+    kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🟩 Я перевел средства Гаранту", callback_data=f"deal_action_paid_{deal_id}")]
+    ])
+    
+    # Сигнализируем участникам
+    await bot.send_message(
+        chat_id=buyer_id,
+        text="⚡ **Администратор-Гарант подключился к сделке!**\n"
+             "Внимательно следите за анонимным чатом. Как только Гарант пришлет реквизиты, сделайте перевод и нажмите кнопку ниже:",
+        reply_markup=kb_buyer
+    )
+    await bot.send_message(
+        chat_id=seller_id,
+        text="⚡ **Администратор-Гарант подключился к сделке!**\nОжидайте проверки и депонирования средств."
+    )
     
 # --- БЕЗОПАСНЫЙ АНОНИМНЫЙ ЧАТ (РЕТРАНСЛЯТОР С МАСКИРОВКОЙ ТЕКСТА И ФОТО) ---
 # Меняем фильтр в декораторе: теперь ловим и текст (F.text), и фотографии (F.photo)
