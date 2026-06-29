@@ -3,7 +3,7 @@ import time
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext  
 from config import ADMIN_IDS
-from database import DB_NAME, has_active_deal, has_required_requisites
+from database import DB_NAME, has_active_deal, has_required_requisites, is_user_guarantor
 
 router = Router()
 
