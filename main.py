@@ -2,9 +2,9 @@ import asyncio
 import random
 import time
 import aiosqlite
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
+from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN, ADMIN_IDS
 from database import init_db, DB_NAME
 from ban_middleware import BanCheckMiddleware
