@@ -20,6 +20,7 @@ async def init_db():
                 deals_count INTEGER DEFAULT 0,
                 is_banned INTEGER DEFAULT 0,       -- 1 = вечный бан, 0 = чист
                 ban_until INTEGER DEFAULT 0        -- Unix-время окончания временного бана
+                kyc_file_id TEXT DEFAULT NULL
             )''')
 
         # Таблица сохраненных реквизитов для ЛК
