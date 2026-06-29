@@ -29,12 +29,19 @@ async def process_verification_start(callback: types.CallbackQuery, state: FSMCo
 @router.message(VerificationStates.waiting_for_data)
 async def process_verification_data(message: types.Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
-    await state.clear() # Сбрасываем состояние ожидания
+    await state.clear()
     
+    # Извлекаем file_id, если пользователь прислал фотографию
+    file_id = message.photo[-1].file_id if message.photo else None
+    
+    # Записываем file_id в базу данных под этого пользователя
+    async with aiosqlite.connect(DB_NAME) as db:
+        if file_id:
+            await db.execute("UPDATE users SET kyc_file_id = ? WHERE tg_id = ?", (file_id, user_id))
+            await db.commit()
+            
     await message.answer("⏳ Ваша заявка успешно отправлена администраторам. Ожидайте решения.")
     
-    # Создаем кнопки для панели администратора
-    # В callback_data зашиваем действие и ID пользователя, которого нужно обработать
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
             types.InlineKeyboardButton(text="👍 Одобрить", callback_data=f"verify_approve_{user_id}"),
@@ -42,23 +49,25 @@ async def process_verification_data(message: types.Message, state: FSMContext, b
         ]
     ])
     
-    # Пересылаем заявку каждому администратору из конфигурации
     for admin_id in ADMIN_IDS:
         try:
+            # Формируем кликабельную ссылку на реальный профиль для админы
+            user_mention = f"[{message.from_user.full_name}](tg://user?id={user_id})"
+            username_text = f" | @{message.from_user.username}" if message.from_user.username else ""
+            
             await bot.send_message(
                 chat_id=admin_id,
                 text=f"🔔 **Новая заявка на верификацию!**\n"
-                     f"ID пользователя: `{user_id}`\n"
-                     f"Ниже предоставлены данные от пользователя.",
-                reply_markup=kb
+                     f"Профиль: {user_mention}{username_text}\n"
+                     f"ID пользователя: `{user_id}`\n",
+                reply_markup=kb,
+                parse_mode="Markdown"
             )
-            # Если пользователь прислал фото, пересылаем его, иначе — текст
             if message.photo:
-                await bot.send_photo(chat_id=admin_id, photo=message.photo[-1].file_id, caption=message.caption)
+                await bot.send_photo(chat_id=admin_id, photo=file_id, caption=message.caption)
             else:
                 await bot.send_message(chat_id=admin_id, text=f"Данные заявки:\n{message.text}")
         except Exception:
-            # Игнорируем ошибки, если какой-то админ еще не запустил бота
             continue
 
 # Обработчик кнопок администратора ( Approve / Decline )
