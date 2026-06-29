@@ -11,6 +11,7 @@ from ban_middleware import BanCheckMiddleware
 
 # Импортируем наши функциональные модули
 import verification
+import admin
 import cabinet
 import offers
 import deals
