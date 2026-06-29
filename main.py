@@ -1,15 +1,18 @@
 import asyncio
 import random
+import time
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ADMIN_IDS
 from database import init_db, DB_NAME
+from ban_middleware import BanCheckMiddleware
 
-# Импортируем наши созданные модули
+# Импортируем наши созданные функциональные модули
 import verification
 import cabinet
 import offers
+import deals
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -58,7 +61,7 @@ async def cmd_start(message: types.Message):
             is_verified = res[0] if res else 0
 
     if is_verified:
-        # Если верифицирован — отправляем красивое Главное Меню
+        # Если верифицирован — отправляем красивое Главное Меню из личного кабинета
         await message.answer(
             f"Добро пожаловать обратно, **{nickname}**!\n"
             f"Вы верифицированы и можете использовать P2P-обмен. Выберите нужный раздел:",
@@ -76,17 +79,80 @@ async def cmd_start(message: types.Message):
             reply_markup=kb
         )
 
+# --- ПАНЕЛЬ МОДЕРАЦИИ: АДМИН-КОМАНДЫ БЛОКИРОВКИ ---
+@dp.message(lambda msg: msg.from_user.id in ADMIN_IDS)
+async def admin_ban_commands(message: types.Message):
+    """Обработчик команд блокировки для администраторов"""
+    text = message.text.strip()
+    
+    # 🛑 КОМАНДА 1: Вечный бан. Формат: /permban [tg_id]
+    if text.startswith("/permban"):
+        args = text.split()
+        if len(args) < 2 or not args[1].isdigit():
+            await message.answer("⚠ Использование: `/permban [tg_id]`")
+            return
+        target_id = int(args[1])
+        
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_banned = 1 WHERE tg_id = ?", (target_id,))
+            await db.commit()
+        await message.answer(f"⛔ Пользователь `{target_id}` забанен **НАВСЕГДА** за попытку скама.")
+        try:
+            await bot.send_message(target_id, "❌ Вы были навсегда заблокированы в боте администрацией.")
+        except Exception: pass
+
+    # ⏳ КОМАНДА 2: Временный бан. Формат: /tempban [tg_id] [минуты]
+    elif text.startswith("/tempban"):
+        args = text.split()
+        if len(args) < 3 or not args[1].isdigit() or not args[2].isdigit():
+            await message.answer("⚠ Использование: `/tempban [tg_id] [минуты]`")
+            return
+        target_id = int(args[1])
+        minutes = int(args[2])
+        
+        ban_timestamp = int(time.time()) + (minutes * 60)
+        
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET ban_until = ? WHERE tg_id = ?", (ban_timestamp, target_id))
+            await db.commit()
+        await message.answer(f"⏳ Пользователь `{target_id}` временно заблокирован на `{minutes}` минут.")
+        try:
+            await bot.send_message(target_id, f"⏳ Вы временно заблокированы на {minutes} минут на время разбирательства.")
+        except Exception: pass
+
+    # 🔓 КОМАНДА 3: Разбан. Формат: /unban [tg_id]
+    elif text.startswith("/unban"):
+        args = text.split()
+        if len(args) < 2 or not args[1].isdigit():
+            await message.answer("⚠ Использование: `/unban [tg_id]`")
+            return
+        target_id = int(args[1])
+        
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET is_banned = 0, ban_until = 0 WHERE tg_id = ?", (target_id,))
+            await db.commit()
+        await message.answer(f"✅ Пользователь `{target_id}` полностью разблокирован.")
+        try:
+            await bot.send_message(target_id, "🎉 Ограничения с вашего аккаунта сняты. Вы снова можете использовать бота.")
+        except Exception: pass
+
 async def main():
     # Инициализируем структуру таблиц при запуске проекта
     await init_db()
     
-    # Подключаем роутеры наших модулей к главному диспетчеру
+    # Подключаем защиту от забаненных пользователей на все типы входящих событий
+    dp.message.middleware(BanCheckMiddleware())
+    dp.callback_query.middleware(BanCheckMiddleware())
+    
+    # Подключаем роутеры всех наших модулей к главному диспетчеру
     dp.include_router(verification.router)
     dp.include_router(cabinet.router)
     dp.include_router(offers.router)
+    dp.include_router(deals.router)
     
     print("База данных проверена. Запуск пуллинга бота...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
