@@ -236,8 +236,10 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             )
         # --- Действие: Успешное закрытие сделки Продавцом ---
         elif action == "completed" and user_id == seller_id and status == "waiting_delivery":
+            # Переводим статус сделки в успех
             await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
-            await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id IN (?, ?)", (buyer_id, seller_id))
+            await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (buyer_id,))
+            await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
             await db.commit()
             
             # Генерируем ряды кнопок. Покупатель оценивает Продавца (seller_id), Продавец — Покупателя (buyer_id)
@@ -283,9 +285,10 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
             async with aiosqlite.connect(DB_NAME) as db:
                 await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
-                await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id IN (?, ?)", (buyer_id, seller_id))
+                await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (buyer_id,))
+                await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
                 await db.commit()
-            
+
             # Точно так же генерируем клавиатуры со звёздами для участников
             kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)]
