@@ -1,6 +1,7 @@
 import asyncio
 import random
 import aiosqlite
+import verification
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from config import BOT_TOKEN
@@ -12,7 +13,16 @@ dp = Dispatcher()
 # Списки для генерации анонимных никнеймов контрагентов
 ADJECTIVES = ["Epic", "Brave", "Silent", "Golden", "Swift", "Mad", "Crazy", "Happy"]
 NOUNS = ["Whale", "Punk", "Trader", "Shark", "Phoenix", "Falcon", "Tiger", "Bear"]
-
+async def main():
+    # Инициализируем структуру таблиц при запуске проекта
+    await init_db()
+    
+    # ПОДКЛЮЧАЕМ НАШ НОВЫЙ РОУТЕР СЮДА:
+    dp.include_router(verification.router)
+    
+    print("База данных проверена. Запуск пуллинга бота...")
+    await dp.start_polling(bot)
+    
 async def register_user_safely(tg_id: int) -> str:
     """
     Атомарная регистрация пользователя с гарантией уникальности никнейма.
