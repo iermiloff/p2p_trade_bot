@@ -87,20 +87,38 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         f"Запущен **Таймер 1 (10 минут)**. Ожидаем подтверждения от продавца..."
     )
     
-    # Если сделка изначально открыта с Гарантом — уведомляем админ-чат
+       # Если сделка изначально открыта с Гарантом — уведомляем главных админов и гарантов комьюнити
     if use_guarantor:
         kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
         ])
-        for admin_id in ADMIN_IDS:
+        
+        # ⚡ СОБИРАЕМ ВСЕХ МЛАДШИХ ГАРАНТОВ ИЗ БАЗЫ ДАННЫХ
+        all_guarantor_ids = list(ADMIN_IDS) # Начинаем со списка главных админов
+        
+        try:
+            async with aiosqlite.connect(DB_NAME) as db:
+                async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as cursor:
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        if row[0] not in all_guarantor_ids:
+                            all_guarantor_ids.append(row[0])
+        except Exception as e:
+            print(f"[ОШИБКА СБОРА ГАРАНТОВ ДЛЯ АЛЕРТА]: {e}")
+
+        # Рассылаем уведомление по объединенному списку
+        for receiver_id in all_guarantor_ids:
             try:
                 await bot.send_message(
-                    chat_id=admin_id,
-                    text=f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{direction}`\nСумма: `{amount}`",
+                    chat_id=receiver_id,
+                    text=f"🚨 **Требуется Гарант для сделки #{deal_id}!**\n"
+                         f"Направление: `{direction}`\n"
+                         f"Сумма/Объем: `{amount}`",
                     reply_markup=kb_admin
                 )
             except Exception:
                 continue
+                
 @router.callback_query(F.data.startswith("deal_action_"))
 async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
@@ -217,18 +235,52 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
         # --- Действие: Открытие диспута вручную ---
         elif action == "dispute" and status == "waiting_delivery":
-            await db.execute("UPDATE deals SET status = 'dispute' WHERE id = ?", (deal_id,))
-            await db.commit()
-            
-            dispute_text = "🚨 **Открыт спор по сделке!**\nТаймеры заморожены. К анонимному чату вызывается Администратор-Гарант для проверки чеков."
-            await callback.message.answer(dispute_text)
-            await bot.send_message(chat_id=buyer_id, text=dispute_text)
-            
             for admin_id in ADMIN_IDS:
                 try:
-                    await bot.send_message(chat_id=admin_id, text=f"⚠️ **ВНИМАНИЕ! Открыт спор (Диспут) по сделке #{deal_id}!** Требуется вмешательство.")
+                    await bot.send_message(chat_id=admin_id, text=f"⚠️ **ВНИМАНИЕ! Открыт спор...")
                 except Exception:
                     continue
+
+        # --- Действие Гаранта: Ручное успешное завершение сделки ---
+        elif action == "gcomplete":
+            async with aiosqlite.connect(DB_NAME) as db:
+                async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as g_cur:
+                    res_g = await g_cur.fetchone()
+            
+            if not res_g or res_g[0] != user_id:
+                await callback.answer("⚠️ Вы не являетесь назначенным Гарантом этой сделки!", show_alert=True)
+                return
+
+            async with aiosqlite.connect(DB_NAME) as db:
+                await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
+                await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id IN (?, ?)", (buyer_id, seller_id))
+                await db.commit()
+            
+            success_text = f"🎉 **Сделка #{deal_id} УСПЕШНО ЗАВЕРШЕНА ГАРАНТОМ!**\nОбмен закрыт. Из суммы удержана комиссия сервиса 10%."
+            await callback.message.edit_text(f"✅ Вы успешно закрыли сделку #{deal_id}.")
+            await bot.send_message(chat_id=buyer_id, text=success_text)
+            await bot.send_message(chat_id=seller_id, text=success_text)
+
+        # --- Действие Гаранта: Ручная отмена сделки ---
+        elif action == "gcancel":
+            async with aiosqlite.connect(DB_NAME) as db:
+                async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as g_cur:
+                    res_g = await g_cur.fetchone()
+            
+            if not res_g or res_g[0] != user_id:
+                await callback.answer("⚠️ Вы не являетесь назначенным Гарантом этой сделки!", show_alert=True)
+                return
+
+            async with aiosqlite.connect(DB_NAME) as db:
+                await db.execute("UPDATE deals SET status = 'cancelled' WHERE id = ?", (deal_id,))
+                await db.execute("UPDATE offers SET status = 'active' WHERE id = ?", (offer_id,))
+                await db.commit()
+            
+            cancel_text = f"❌ **Сделка #{deal_id} ОТМЕНЕНА ГАРАНТОМ!**\nЗаявка вернулась в стакан, средства подлежат возврату."
+            await callback.message.edit_text(f"❌ Вы отменили сделку #{deal_id}.")
+            await bot.send_message(chat_id=buyer_id, text=cancel_text)
+            await bot.send_message(chat_id=seller_id, text=cancel_text)
+
                     
 # --- ВХОД АДМИНИСТРАТОРА ИЛИ ГАРАНТА КОМЬЮНИТИ В СДЕЛКУ ---
 @router.callback_query(F.data.startswith("admin_claim_deal_"))
@@ -336,7 +388,11 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot, state: FSMConte
     
     # Определяем, кто пишет, и формируем защищенный префикс
     if sender_id == guarantor_id:
-        prefix = f"⚡ **[ГАРАНТ (Admin)]**"
+        # Если ID гаранта сделки находится в ADMIN_IDS — это Главный Админ, иначе — Гарант
+        if sender_id in ADMIN_IDS:
+            prefix = f"⚡ **[ГАРАНТ (Admin)]**"
+        else:
+            prefix = f"🛡️ **[ГАРАНТ (Guarantor)]**"
     elif sender_id == buyer_id:
         prefix = f"👤 **[{nicks_dict.get(buyer_id, 'Покупатель')}]**"
     elif sender_id == seller_id:
