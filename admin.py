@@ -68,13 +68,14 @@ async def admin_show_stats(callback: types.CallbackQuery):
     ])
     await callback.message.edit_text(text, reply_markup=kb)
 
-# --- 2. ПРОСМОТР ЗАЯВОК НА ВЕРИФИКАЦИЮ ---
+# --- 2. ПРОСМОТР ЗАЯВОК НА ВЕРИФИКАЦИЮ (С КНОПКАМИ УПРАВЛЕНИЯ) ---
 @router.callback_query(F.data == "admin_view_kyc")
-async def admin_view_kyc_list(callback: types.CallbackQuery):
+async def admin_view_kyc_list(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
     
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT tg_id, nickname FROM users WHERE is_verified = 0 LIMIT 10") as cursor:
+        # Находим пользователей, у которых is_verified = 0 (ждут проверку)
+        async with db.execute("SELECT tg_id, nickname FROM users WHERE is_verified = 0 LIMIT 5") as cursor:
             unverified = await cursor.fetchall()
             
     if not unverified:
@@ -84,15 +85,28 @@ async def admin_view_kyc_list(callback: types.CallbackQuery):
         await callback.message.edit_text("📋 Нет новых необработанных заявок на верификацию.", reply_markup=kb)
         return
         
-    text = "📋 **Список пользователей, ожидающих верификацию (последние 10):**\n\n"
-    for tg_id, nickname in unverified:
-        text += f"• **{nickname}** (ID: `{tg_id}`)\n"
-    text += "\nВы можете одобрить или отклонить их через сообщения алертов в чате."
-    
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_admin")]
+    # Сначала пишем заголовок, заменяя текст текущего сообщения
+    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="back_to_admin")]
     ])
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text("📋 **Пользователи, ожидающие верификацию:**\n(Вы можете подтвердить их прямо отсюда)", reply_markup=kb_back)
+    
+    # Выводим каждого пользователя ОТДЕЛЬНЫМ сообщением с его личными кнопками одобрения!
+    # Мы используем те же callback_data, что и в модуле верификации (verify_approve_ / verify_decline_)
+    for tg_id, nickname in unverified:
+        kb_manage = types.InlineKeyboardMarkup(inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text="👍 Одобрить", callback_data=f"verify_approve_{tg_id}"),
+                types.InlineKeyboardButton(text="👎 Отклонить", callback_data=f"verify_decline_{tg_id}")
+            ]
+        ])
+        
+        await callback.message.answer(
+            f"👤 **Пользователь:** {nickname}\n"
+            f"🆔 Telegram ID: `{tg_id}`",
+            reply_markup=kb_manage,
+            parse_mode="Markdown"
+        )
 
 # --- 3. СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ ПЛАТФОРМЫ ---
 @router.callback_query(F.data == "admin_view_users")
