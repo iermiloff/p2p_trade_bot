@@ -60,10 +60,15 @@ async def show_statistics(callback: types.CallbackQuery):
         nickname, user_status, rating, deals_count = user_data
         status_text = STATUS_NAMES.get(user_status, "🟢 Верифицированный")
         
+        # ⚡ ГЕЙМИФИКАЦИЯ: Вычисляем текущий титул трейдера
+        from database import get_user_title
+        user_title = await get_user_title(deals_count, rating)
+        
         text = (
             f"📊 **Ваша статистика в системе:**\n\n"
             f"👤 Никнейм: **{nickname}**\n"
-            f"🎖 Статус: {status_text}\n"
+            f"🎖 Титул: **{user_title}**\n"  # Выводим звание
+            f"💼 Роль: {status_text}\n"
             f"⭐ Рейтинг: **{rating:.1f}**\n"
             f"🤝 Успешных сделок: **{deals_count}**\n"
         )
