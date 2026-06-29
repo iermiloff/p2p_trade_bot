@@ -61,7 +61,7 @@ async def cmd_start(message: types.Message):
         is_verified = 1
 
     if is_verified:
-        # ⚡ НАЧАЛО БЛОКА ВОССТАНОВЛЕНИЯ АКТИВНОЙ СДЕЛКИ
+        # ⚡ 1. ПЕРВЫМ ДЕЛОМ ПРОВЕРЯЕМ АКТИВНУЮ СДЕЛКУ
         async with aiosqlite.connect(DB_NAME) as db:
             # Ищем, нет ли у пользователя сделки в процессах оплаты или выдачи
             query = """
@@ -81,25 +81,22 @@ async def cmd_start(message: types.Message):
             role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
             
             if status == 'waiting_payment' and tg_id == buyer_id:
-                # Покупатель еще не оплатил
                 btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")]
                 ])
             elif status == 'waiting_delivery' and tg_id == seller_id:
-                # Продавец должен подтвердить получение и выпустить средства
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
                     [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
                 ])
             elif status == 'waiting_delivery' and tg_id == buyer_id:
-                # Покупатель ждет, даем ему кнопку вызова спора на случай форс-мажора
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
                 ])
 
             status_labels = {
-                'waiting_payment': 'Ожидание оплаты от Покупателя',
+                'waiting_payment': 'Ожинение оплаты от Покупателя',
                 'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
                 'dispute': 'Внештатная ситуация (Открыт спор)'
             }
@@ -108,27 +105,29 @@ async def cmd_start(message: types.Message):
                 f"🔄 **Вы вернулись в активную сделку #{deal_id}!**\n\n"
                 f"👤 Ваша роль: **{role_text}**\n"
                 f"📊 Текущий статус: _{status_labels.get(status, status)}_\n"
-                f"💬 Анонимный чат по-прежнему активен. Вы можете общаться с контрагентом напрямую.\n\n"
+                f"💬 Анонимный чат по-прежнему активен.\n\n"
                 f"Если кнопки управления пропали, используйте панель ниже:",
                 reply_markup=kb,
                 parse_mode="Markdown"
             )
-            return # ⚡ ВАЖНО: Прерываем выполнение, чтобы не показывать Главное меню во время сделки
-        # ⚡ КОНЕЦ БЛОКА ВОССТАНОВЛЕНИЯ
+            return # ⚡ Прерываем выполнение! Код ниже НЕ выполнится, меню не отправится.
 
-        # Если активных сделок нет — показываем обычное Главное Меню
-        await message.answer(
-            f"Добро пожаловать обратно, **{nickname}**!\nВы можете использовать P2P-обмен. Выберите нужный раздел:",
-            reply_markup=cabinet.get_main_keyboard()
-        )
-    else:
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🛡 Пройти верификацию", callback_data="start_verification")]
-        ])
-        await message.answer(
-            f"Привет! Твой анонимный никнейм: **{nickname}**.\n\nДля безопасности сделки доступны после верификации.",
-            reply_markup=kb
-        )
+        # ⚡ 2. ЕСЛИ АКТИВНОЙ СДЕЛКИ НЕТ — ВЫДАЕМ СООТВЕТСТВУЮЩЕЕ МЕНЮ
+        if tg_id in ADMIN_IDS:
+            import admin
+            await message.answer(
+                f"🛠 **Добро пожаловать в панель управления, {nickname}!**\n"
+                f"Вам, как администратору, отключены стандартные торговые функции платформы.\n\n"
+                f"Выберите необходимый раздел для модерации:",
+                reply_markup=admin.get_admin_keyboard()
+            )
+        else:
+            # Обычные верифицированные пользователи видят стандартную панель P2P
+            await message.answer(
+                f"Добро пожаловать обратно, **{nickname}**!\n"
+                f"Вы можете использовать P2P-обмен. Выберите нужный раздел:",
+                reply_markup=cabinet.get_main_keyboard()
+            )
 
 
 # --- ПАНЕЛЬ ДИАГНОСТИКИ (ТЕПЕРЬ НА ВЫДЕЛЕННОМ РОУТЕРЕ) ---
