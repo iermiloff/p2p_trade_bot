@@ -92,21 +92,29 @@ async def admin_show_stored_document(callback: types.CallbackQuery, bot: Bot):
         )
     else:
         await callback.message.answer("⚠️ Документ не найден в базе данных (возможно, пользователь отправил только текст).")
-
+        
 # --- 3. СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ С РЕАЛЬНЫМИ ССЫЛКАМИ ---
 @router.callback_query(F.data == "admin_view_users")
 async def admin_view_users_list(callback: types.CallbackQuery):
     await callback.answer()
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT tg_id, nickname, user_status, rating, deals_count FROM users LIMIT 15") as cursor:
+        # ⚡ ДОБАВИЛИ: вытаскиваем флаг is_verified из базы данных
+        async with db.execute("SELECT tg_id, nickname, user_status, rating, deals_count, is_verified FROM users LIMIT 15") as cursor:
             users = await cursor.fetchall()
             
     text = "👥 **Список пользователей системы (до 15 человек):**\n\n"
-    for tg_id, nick, status, rating, deals in users:
-        status_name = STATUS_NAMES.get(status, status)
-        # Генерируем админу кликабельную ссылку на реальный аккаунт человека
+    for tg_id, nick, status, rating, deals, is_verified in users:
+        # Динамически определяем, прошел ли пользователь ручную проверку
+        if is_verified == 1:
+            kyc_badge = "🟢 Доступ разрешен"
+            # Если это админ, у него статус super_trader, иначе подставляем имя статуса
+            status_name = STATUS_NAMES.get(status, "🟢 Верифицированный")
+        else:
+            kyc_badge = "⏳ Ожидает верификацию"
+            status_name = "❌ Доступ закрыт"
+            
         real_profile_link = f"[{nick}](tg://user?id={tg_id})"
-        text += f"• Профиль: {real_profile_link} | ID: `{tg_id}`\n  └ Статус: {status_name} | ⭐ {rating:.1f} | 🤝 Сделок: {deals}\n\n"
+        text += f"• Профиль: {real_profile_link} | ID: `{tg_id}`\n  └ Проверка KYC: **{kyc_badge}**\n  └ Ранг: {status_name} | ⭐ {rating:.1f} | 🤝 Сделок: {deals}\n\n"
         
     await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_admin")]]), parse_mode="Markdown")
 
