@@ -92,39 +92,7 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         f"Запущен **Таймер 1 (10 минут)**. Ожидаем подтверждения от продавца...{fee_text}",
         parse_mode="Markdown"
     )
-    
-       # Если сделка изначально открыта с Гарантом — уведомляем главных админов и гарантов комьюнити
-    if use_guarantor:
-        kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
-        ])
-        
-        # ⚡ СОБИРАЕМ ВСЕХ МЛАДШИХ ГАРАНТОВ ИЗ БАЗЫ ДАННЫХ
-        all_guarantor_ids = list(ADMIN_IDS) # Начинаем со списка главных админов
-        
-        try:
-            async with aiosqlite.connect(DB_NAME) as db:
-                async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as cursor:
-                    rows = await cursor.fetchall()
-                    for row in rows:
-                        if row[0] not in all_guarantor_ids:
-                            all_guarantor_ids.append(row[0])
-        except Exception as e:
-            print(f"[ОШИБКА СБОРА ГАРАНТОВ ДЛЯ АЛЕРТА]: {e}")
 
-        # Рассылаем уведомление по объединенному списку
-        for receiver_id in all_guarantor_ids:
-            try:
-                await bot.send_message(
-                    chat_id=receiver_id,
-                    text=f"🚨 **Требуется Гарант для сделки #{deal_id}!**\n"
-                         f"Направление: `{direction}`\n"
-                         f"Сумма/Объем: `{amount}`",
-                    reply_markup=kb_admin
-                )
-            except Exception:
-                continue
-                
 @router.callback_query(F.data.startswith("deal_action_"))
 async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
@@ -157,7 +125,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не указано")
             b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
             
-            # ⚡ РАЗВЕТВЛЕНИЕ А: СДЕЛКА С ГАРАНТОМ (Обновленный текст с комиссией)
+            # ⚡ РАЗВЕТВЛЕНИЕ А: СДЕЛКА С ГАРАНТОМ
             if use_guarantor == 1:
                 await bot.send_message(
                     chat_id=buyer_id,
@@ -173,13 +141,45 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                          f"💬 Анонимный чат открыт.\n\n"
                          f"Ожидайте подключения Гаранта. Напоминаем, что выплата средств получателю производится за вычетом **10% комиссии** платформы."
                 )
+
+                # 🔔 ТЕПЕРЬ АЛЕРТ ОТПРАВЛЯЕТСЯ СТРОГО ЗДЕСЬ (ПОСЛЕ ПОДТВЕРЖДЕНИЯ ПРОДАВЦА):
+                kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
+                ])
                 
-                await bot.send_message(
-                    chat_id=seller_id,
-                    text=f"🛡️ **Сделка #{deal_id} открыта ЧЕРЕЗ ГАРАНТА!**\n"
-                         f"💬 Анонимный чат открыт.\n\n"
-                         f"Ожидайте подключения Администратора-Гаранта. Он напишет реквизиты для заморозки вашей части обмена."
-                )
+                # Извлекаем данные объявления для красивого алерта Гаранту
+                async with aiosqlite.connect(DB_NAME) as db:
+                    async with db.execute("SELECT direction, amount FROM offers WHERE id = ?", (offer_id,)) as o_cur:
+                        o_res = await o_cur.fetchone()
+                
+                o_dir = o_res if o_res else "Неизвестно"
+                o_amt = o_res if o_res else "Неизвестно"
+
+                all_guarantor_ids = list(ADMIN_IDS)
+                try:
+                    async with aiosqlite.connect(DB_NAME) as db:
+                        async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as cursor:
+                            rows = await cursor.fetchall()
+                            for row in rows:
+                                uid = row
+                                if uid not in all_guarantor_ids:
+                                    all_guarantor_ids.append(uid)
+                except Exception as e:
+                    print(f"[ОШИБКА СБОРА ГАРАНТОВ]: {e}")
+
+                # Рассылаем уведомление Гарантам
+                for receiver_id in all_guarantor_ids:
+                    try:
+                        await bot.send_message(
+                            chat_id=receiver_id,
+                            text=f"🚨 **Требуется Гарант для сделки #{deal_id}!**\n"
+                                 f"Направление: `{o_dir}`\n"
+                                 f"Сумма/Объем: `{o_amt}`",
+                            reply_markup=kb_admin
+                        )
+                    except Exception:
+                        continue
+
                 
             # 🟢 РАЗВЕТВЛЕНИЕ Б: ОБЫЧНАЯ ПРЯМАЯ СДЕЛКА
             else:
