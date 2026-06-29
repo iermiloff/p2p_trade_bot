@@ -11,19 +11,21 @@ router = Router()
 async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
     buyer_id = callback.from_user.id
     
+    # Разбираем callback: deal_open_[direct/guarantor]_[offer_id]
     parts = callback.data.split("_")
-    mode = parts          # 'direct' или 'guarantor'
-    offer_id = int(parts)
+    mode = parts        # Берем индекс 2: 'direct' или 'guarantor'
     
-    # 🛡️ СВЕРХНОВАЯ ЗАЩИТА: Проверяем, заполнил ли ПОКУПАТЕЛЬ реквизиты для этого направления
-    # Сначала узнаем направление (direction) из самого объявления
+    # ⚡ ИСПРАВЛЕНО: Берем ПОСЛЕДНИЙ элемент списка (индекс 2), где лежит текстовый ID объявления, 
+    # и только его превращаем в число
+    offer_id = int(parts) 
+    
+    # 🛡️ ЗАЩИТА: Проверяем, заполнил ли ПОКУПАТЕЛЬ реквизиты для этого направления
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT direction FROM offers WHERE id = ?", (offer_id,)) as cursor:
             res_dir = await cursor.fetchone()
             
     if res_dir:
-        direction = res_dir[0]
-        # Проверяем платежные данные покупателя для этого типа обмена
+        direction = res_dir
         if not await has_required_requisites(buyer_id, direction):
             await callback.answer(
                 "⚠️ Отказано в сделке!\n\n"
@@ -32,11 +34,11 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
             )
             return
 
-    # 🛡️ ЗАЩИТА 1: У покупателя не должно быть других активных сделок (этот код уже был)
+    # 🛡️ ЗАЩИТА 1: У покупателя не должно быть других активных сделок
     if await has_active_deal(buyer_id):
         await callback.answer("⚠️ Вы не можете открыть новую сделку, пока не завершите или не отмените текущую!", show_alert=True)
         return
-        
+                
     async with aiosqlite.connect(DB_NAME) as db:
         # Проверяем, существует ли еще объявление и активно ли оно
         async with db.execute("SELECT creator_id, direction, amount, rate FROM offers WHERE id = ? AND status = 'active'", (offer_id,)) as cursor:
