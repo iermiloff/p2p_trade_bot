@@ -1,5 +1,5 @@
 import aiosqlite
-from database import DB_NAME, check_offer_limit, has_required_requisites
+from database import DB_NAME, check_offer_limit, has_required_requisites, get_user_title
 from aiogram import Router, F, types
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -146,12 +146,15 @@ async def show_offers_list(callback: types.CallbackQuery):
     async with aiosqlite.connect(DB_NAME) as db:
         # Соединяем таблицы offers и users, чтобы вытащить никнейм и рейтинг создателя
         query = f"""
-            SELECT offers.id, offers.offer_type, offers.amount, offers.rate, users.nickname, users.rating, users.user_status, offers.creator_id
+            SELECT offers.id, offers.offer_type, offers.amount, offers.rate, 
+                   users.nickname, users.rating, users.user_status, offers.creator_id,
+                   users.deals_count
             FROM offers 
             JOIN users ON offers.creator_id = users.tg_id
             WHERE offers.direction = ? AND offers.status = 'active'
             ORDER BY {order_by} LIMIT 10
         """
+
         async with db.execute(query, (direction,)) as cursor:
             offers = await cursor.fetchall()
             
@@ -165,25 +168,27 @@ async def show_offers_list(callback: types.CallbackQuery):
     await callback.message.answer(f"📋 **Активные заявки ({DIRECTION_LABELS.get(direction)}):**\n" + "—"*15)
     
     # Выводим каждую заявку отдельным сообщением с кнопками принятия сделки
-    for offer_id, o_type, amount, rate, nick, rating, status, creator_id in offers:
+    for offer_id, o_type, amount, rate, nick, rating, status, creator_id, deals_cnt in offers:
         type_label = "🟢 КУПИТ" if o_type == "buy" else "🔴 ПРОДАСТ"
-        
-        # Защита: создатель объявления не должен принимать свою же заявку
+
+        # ⚡ ГЕЙМИФИКАЦИЯ: Считаем титул автора объявления
+        user_title = await get_user_title(deals_cnt, rating)
+
         if creator_id == callback.from_user.id:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="❌ Ваше объявление", callback_data="dummy_own_offer")]
-            ])
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="❌ Ваше объявление", callback_data="dummy_own_offer")]])
         else:
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="🤝 Принять сделку", callback_data=f"deal_open_direct_{offer_id}")],
                 [types.InlineKeyboardButton(text="🛡 С Гарантом", callback_data=f"deal_open_guarantor_{offer_id}")]
             ])
-            
+
         offer_text = (
-            f"👤 **Профиль:** {nick} (⭐ {rating:.1f})\n"
+            f"👤 **Профиль:** {nick} ({user_title})\n"  # Подставляем титул
+            f"📊 **Репутация:** ⭐ {rating:.1f} | 🤝 Сделок: {deals_cnt}\n"
             f"📋 **Действие:** {type_label}\n"
             f"💰 **Объем:** `{amount}`\n"
             f"📊 **Курс/Условия:** `{rate}`\n"
             f"ℹ _Реквизиты скрыты и будут выданы после открытия сделки._"
         )
         await callback.message.answer(offer_text, reply_markup=kb, parse_mode="Markdown")
+
