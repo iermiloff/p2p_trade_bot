@@ -58,7 +58,7 @@ nano .env
 
 4. Запустите бота:
 ```bash
-python3 main.py
+export $(xargs < .env) && python3 main.py
 ```
 
 ---
