@@ -211,9 +211,10 @@ async def admin_claim_deal(callback: types.CallbackQuery):
 # --- БЕЗОПАСНЫЙ АНОНИМНЫЙ ЧАТ (РЕТРАНСЛЯТОР С МАСКИРОВКОЙ) ---
 from aiogram.filters import StateFilter
 
+# Явно указываем, что чат работает только когда у пользователя НЕТ активных состояний FSM
 @router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
 async def anonymous_chat_relay(message: types.Message, bot: Bot):
-    # Весь внутренний код функции anonymous_chat_relay остается прежним!
+
     sender_id = message.from_user.id
     
     # ⚡ ВАЖНО: Если пользователь сейчас находится в процессе ввода FSM (например, пишет реквизиты),
