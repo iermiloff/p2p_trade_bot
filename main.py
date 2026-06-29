@@ -11,17 +11,17 @@ from ban_middleware import BanCheckMiddleware
 
 # Импортируем наши функциональные модули
 import verification
-import admin
 import cabinet
 import offers
 import deals
+import admin  # Наша админ-панель
 
-# Инициализируем бота и Диспетчер
+# Инициализируем бота и Диспетчер строго с MemoryStorage
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ⚡ СОЗДАЕМ ВЫДЕЛЕННЫЙ РОУТЕР ДЛЯ АДМИН-КОМАНД И ДИАГНОСТИКИ
-admin_router = Router()
+# Роутер для базовых команд (старт и баны), которые прописаны в main.py
+main_admin_router = Router()
 
 ADJECTIVES = ["Epic", "Brave", "Silent", "Golden", "Swift", "Mad", "Crazy", "Happy"]
 NOUNS = ["Whale", "Punk", "Trader", "Shark", "Phoenix", "Falcon", "Tiger", "Bear"]
@@ -32,7 +32,7 @@ async def register_user_safely(tg_id: int) -> str:
         async with db.execute("SELECT nickname FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             user = await cursor.fetchone()
             if user:
-                return user[0]
+                return user
 
         while True:
             nickname = f"{random.choice(ADJECTIVES)} {random.choice(NOUNS)}"
@@ -44,7 +44,7 @@ async def register_user_safely(tg_id: int) -> str:
             except aiosqlite.IntegrityError:
                 continue
 
-@admin_router.message(CommandStart())
+@main_admin_router.message(CommandStart())
 async def cmd_start(message: types.Message):
     tg_id = message.from_user.id
     nickname = await register_user_safely(tg_id)
@@ -54,7 +54,7 @@ async def cmd_start(message: types.Message):
             res = await cursor.fetchone()
             is_verified = res if res else 0
 
-    # Авто-верификация для администраторов при первом старте
+    # Авто-вериф для админов при первом старте
     if tg_id in ADMIN_IDS and not is_verified:
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE users SET is_verified = 1, user_status = 'super_trader' WHERE tg_id = ?", (tg_id,))
@@ -64,7 +64,6 @@ async def cmd_start(message: types.Message):
     if is_verified:
         # ⚡ 1. ПЕРВЫМ ДЕЛОМ ПРОВЕРЯЕМ АКТИВНУЮ СДЕЛКУ
         async with aiosqlite.connect(DB_NAME) as db:
-            # Ищем, нет ли у пользователя сделки в процессах оплаты или выдачи
             query = """
                 SELECT id, status, buyer_id, seller_id, use_guarantor 
                 FROM deals 
@@ -76,8 +75,6 @@ async def cmd_start(message: types.Message):
 
         if active_deal:
             deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
-            
-            # Динамически восстанавливаем нужные кнопки управления в зависимости от роли и статуса
             kb = None
             role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
             
@@ -97,7 +94,7 @@ async def cmd_start(message: types.Message):
                 ])
 
             status_labels = {
-                'waiting_payment': 'Ожинение оплаты от Покупателя',
+                'waiting_payment': 'Ожидание оплаты от Покупателя',
                 'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
                 'dispute': 'Внештатная ситуация (Открыт спор)'
             }
@@ -111,11 +108,10 @@ async def cmd_start(message: types.Message):
                 reply_markup=kb,
                 parse_mode="Markdown"
             )
-            return # ⚡ Прерываем выполнение! Код ниже НЕ выполнится, меню не отправится.
+            return
 
         # ⚡ 2. ЕСЛИ АКТИВНОЙ СДЕЛКИ НЕТ — ВЫДАЕМ СООТВЕТСТВУЮЩЕЕ МЕНЮ
         if tg_id in ADMIN_IDS:
-            import admin
             await message.answer(
                 f"🛠 **Добро пожаловать в панель управления, {nickname}!**\n"
                 f"Вам, как администратору, отключены стандартные торговые функции платформы.\n\n"
@@ -123,16 +119,21 @@ async def cmd_start(message: types.Message):
                 reply_markup=admin.get_admin_keyboard()
             )
         else:
-            # Обычные верифицированные пользователи видят стандартную панель P2P
             await message.answer(
-                f"Добро пожаловать обратно, **{nickname}**!\n"
-                f"Вы можете использовать P2P-обмен. Выберите нужный раздел:",
+                f"Добро пожаловать обратно, **{nickname}**!\nВы можете использовать P2P-обмен. Выберите нужный раздел:",
                 reply_markup=cabinet.get_main_keyboard()
             )
+    else:
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🛡 Пройти верификацию", callback_data="start_verification")]
+        ])
+        await message.answer(
+            f"Привет! Твой анонимный никнейм: **{nickname}**.\n\nДля безопасности сделки доступны после верификации.",
+            reply_markup=kb
+        )
 
-
-# --- ПАНЕЛЬ ДИАГНОСТИКИ (ТЕПЕРЬ НА ВЫДЕЛЕННОМ РОУТЕРЕ) ---
-@admin_router.message(Command("debug"))
+# --- ПАНЕЛЬ ДИАГНОСТИКИ ---
+@main_admin_router.message(Command("debug"))
 async def cmd_debug_db(message: types.Message):
     user_id = message.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
@@ -149,8 +150,8 @@ async def cmd_debug_db(message: types.Message):
     )
     await message.answer(text)
 
-# --- ПАНЕЛЬ МОДЕРАЦИИ (НА ВЫДЕЛЕННОМ РОУТЕРЕ) ---
-@admin_router.message(lambda msg: msg.from_user.id in ADMIN_IDS and msg.text and msg.text.startswith("/"))
+# --- ПАНЕЛЬ МОДЕРАЦИИ: БАНЫ ---
+@main_admin_router.message(lambda msg: msg.from_user.id in ADMIN_IDS and msg.text and msg.text.startswith("/"))
 async def admin_ban_commands(message: types.Message):
     text = message.text.strip()
     
@@ -192,18 +193,21 @@ async def admin_ban_commands(message: types.Message):
 async def main():
     await init_db()
     
-    # Регистрируем Middleware модерации (внутренний слой)
+    # Внутренний Middleware модерации банов
     dp.message.middleware(BanCheckMiddleware())
     dp.callback_query.middleware(BanCheckMiddleware())
     
-    # ⚡ ВАЖНО: Подключаем админский роутер самым ПЕРВЫМ, чтобы команды перехватывались до чатов
-    dp.include_router(admin_router)
+    # ⚡ СТРОГИЙ ПОРЯДОК: Сначала подключаем ВСЕ админские модули, чтобы они перехватывали инлайн-клики кнопок панели
+    dp.include_router(admin.router)             # Роутер инлайн-кнопок из admin.py
+    dp.include_router(main_admin_router)        # Роутер текстовых команд из main.py
+    
+    # Торговые роутеры пользователей
     dp.include_router(cabinet.router)
     dp.include_router(offers.router)
     dp.include_router(verification.router)
     dp.include_router(deals.router)
     
-    # Запускаем фоновый таймер таймаутов
+    # Фоновую задачу в асинхронный цикл
     import tasks
     asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
     
@@ -211,7 +215,6 @@ async def main():
     
     # Сбрасываем кэш зависших апдейтов
     await bot.delete_webhook(drop_pending_updates=True)
-    
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
