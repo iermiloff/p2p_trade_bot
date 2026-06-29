@@ -163,15 +163,15 @@ async def main():
     # Инициализируем структуру таблиц при запуске проекта
     await init_db()
     
-    # Подключаем защиту от забаненных пользователей
-    dp.message.middleware(BanCheckMiddleware())
-    dp.callback_query.middleware(BanCheckMiddleware())
+    # ⚡ ИСПРАВЛЕНО: Регистрируем Middleware на глобальном уровне обновлений (Update)
+    # Это гарантирует, что и команды, и текст, и FSM будут проходить проверку корректно
+    dp.update.outer_middleware(BanCheckMiddleware())
     
-    # СТРОГИЙ ПОРЯДОК ПОДКЛЮЧЕНИЯ РОУТЕРОВ (От легких к тяжелым)
+    # Строгий порядок подключения роутеров (от легких к тяжелым)
     dp.include_router(cabinet.router)       # 1. Личный кабинет (Реквизиты FSM)
     dp.include_router(offers.router)        # 2. Торговый стакан заявок
     dp.include_router(verification.router)  # 3. Верификация
-    dp.include_router(deals.router)         # 4. Сделки и Анонимный чат (в самом конце!)
+    dp.include_router(deals.router)         # 4. Сделки и Анонимный чат
     
     # Запускаем автоматический таймер отмены сделок в фоне
     asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
