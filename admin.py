@@ -1,5 +1,5 @@
 import aiosqlite
-from aiogram import Router, F, types
+from aiogram import Router, F, types, Bot  
 from aiogram.filters import Command
 from config import ADMIN_IDS
 from database import DB_NAME
