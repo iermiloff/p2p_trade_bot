@@ -1,4 +1,5 @@
 import aiosqlite
+from database import DB_NAME, check_offer_limit, has_required_requisites
 from aiogram import Router, F, types
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -44,7 +45,22 @@ async def start_create_offer(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     direction = callback.data.replace("create_start_", "")
     
-    # 🛡 АНТИ-СПАМ ЗАЩИТА: Проверяем лимит активных заявок пользователя
+    # 🛡️ ЗАЩИТА 1: Проверяем, заполнены ли реквизиты для этого направления
+    if not await has_required_requisites(user_id, direction):
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="⚙️ Заполнить реквизиты", callback_data="lk_requisites")],
+            [types.InlineKeyboardButton(text="⬅ Назад", callback_data=f"nav_{direction}")]
+        ])
+        await callback.message.answer(
+            f"⚠ **Внимание! Реквизиты не заполнены.**\n\n"
+            f"Для создания заявки в направлении **{DIRECTION_LABELS.get(direction, direction)}** "
+            f"у вас должны быть обязательно сохранены платежные данные в Личном Кабинете.\n"
+            f"Пожалуйста, заполните их перед продолжением.",
+            reply_markup=kb
+        )
+        return
+
+    # 🛡️ ЗАЩИТА 2: Проверяем лимит активных заявок пользователя
     if not await check_offer_limit(user_id):
         await callback.message.answer(
             "⚠️ **Превышен лимит заявок!**\n"
