@@ -164,9 +164,9 @@ async def main():
     # Инициализируем структуру таблиц при запуске проекта
     await init_db()
     
-    # ⚡ ИСПРАВЛЕНО: Регистрируем Middleware на глобальном уровне обновлений (Update)
-    # Это гарантирует, что и команды, и текст, и FSM будут проходить проверку корректно
-    dp.update.outer_middleware(BanCheckMiddleware())
+    # ⚡ ИСПРАВЛЕНО: Регистрируем Middleware как внутренний (внутренние слои не ломают FSM и команды)
+    dp.message.middleware(BanCheckMiddleware())
+    dp.callback_query.middleware(BanCheckMiddleware())
     
     # Строгий порядок подключения роутеров (от легких к тяжелым)
     dp.include_router(cabinet.router)       # 1. Личный кабинет (Реквизиты FSM)
