@@ -234,16 +234,33 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                      f"⏳ Запущен **Таймер 3 (10 минут)**. Если средства пришли, обязательно нажмите завершение:",
                 reply_markup=kb_seller
             )
-
-        # --- Действие: Успешное закрытие сделки ---
+        # --- Действие: Успешное закрытие сделки Продавцом ---
         elif action == "completed" and user_id == seller_id and status == "waiting_delivery":
             await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id IN (?, ?)", (buyer_id, seller_id))
             await db.commit()
             
-            success_text = f"🎉 **Сделка #{deal_id} успешно завершена!**\nЧат закрыт. Спасибо за обмен! +1 к вашей статистике."
-            await callback.message.edit_text(success_text)
-            await bot.send_message(chat_id=buyer_id, text=success_text)
+            # Генерируем ряды кнопок. Покупатель оценивает Продавца (seller_id), Продавец — Покупателя (buyer_id)
+            kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)]
+            ])
+            kb_rate_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{buyer_id}_{i}") for i in range(1, 6)]
+            ])
+            
+            # Обновляем сообщение Продавца
+            await callback.message.edit_text(
+                f"🎉 **Сделка #{deal_id} успешно завершена!**\n"
+                f"Чат закрыт. Пожалуйста, оцените работу Покупателя от 1 до 5 звёзд:",
+                reply_markup=kb_rate_buyer
+            )
+            # Отправляем сообщение Покупателю
+            await bot.send_message(
+                chat_id=buyer_id,
+                text=f"🎉 **Сделка #{deal_id} успешно завершена!**\n"
+                     f"Продавец подтвердил получение средств. Пожалуйста, оцените Продавца от 1 до 5 звёзд:",
+                reply_markup=kb_rate_seller
+            )
 
         # --- Действие: Открытие диспута вручную ---
         elif action == "dispute" and status == "waiting_delivery":
@@ -255,6 +272,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
         # --- Действие Гаранта: Ручное успешное завершение сделки ---
         elif action == "gcomplete":
+            # (Тут остаётся ваша старая проверка res_g != user_id)
             async with aiosqlite.connect(DB_NAME) as db:
                 async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as g_cur:
                     res_g = await g_cur.fetchone()
@@ -268,10 +286,26 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id IN (?, ?)", (buyer_id, seller_id))
                 await db.commit()
             
-            success_text = f"🎉 **Сделка #{deal_id} УСПЕШНО ЗАВЕРШЕНА ГАРАНТОМ!**\nОбмен закрыт. Из суммы удержана комиссия сервиса 10%."
-            await callback.message.edit_text(f"✅ Вы успешно закрыли сделку #{deal_id}.")
-            await bot.send_message(chat_id=buyer_id, text=success_text)
-            await bot.send_message(chat_id=seller_id, text=success_text)
+            # Точно так же генерируем клавиатуры со звёздами для участников
+            kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)]
+            ])
+            kb_rate_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{buyer_id}_{i}") for i in range(1, 6)]
+            ])
+
+            await callback.message.edit_text(f"✅ Вы успешно закрыли сделку #{deal_id} в качестве Гаранта.")
+            
+            await bot.send_message(
+                chat_id=buyer_id,
+                text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\nПожалуйста, оцените работу Продавца от 1 до 5 звёзд:",
+                reply_markup=kb_rate_seller
+            )
+            await bot.send_message(
+                chat_id=seller_id,
+                text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\nПожалуйста, оцените работу Покупателя от 1 до 5 звёзд:",
+                reply_markup=kb_rate_buyer
+            )
 
         # --- Действие Гаранта: Ручная отмена сделки ---
         elif action == "gcancel":
@@ -446,3 +480,39 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot, state: FSMConte
             except Exception as e:
                 print(f"[ОШИБКА РЕТРАНСЛЯЦИИ ЧАТА СДЕЛКИ #{deal_id}]: {e}")
                 continue
+
+# --- ХЭНДЛЕР НАЧИСЛЕНИЯ ОЦЕНОК И ПЕРЕРАСЧЕТА СРЕДНЕГО РЕЙТИНГА ---
+@router.callback_query(F.data.startswith("rate_user_"))
+async def process_user_rating(callback: types.CallbackQuery):
+    await callback.answer()
+    
+    # Разбираем callback_data (формат: rate_user_[target_id]_[stars])
+    parts = callback.data.split("_")
+    target_id = int(parts[2])
+    stars = int(parts[3])
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        # 1. Извлекаем текущую сумму звезд и количество оценок контрагента
+        async with db.execute("SELECT rating_sum, rating_count FROM users WHERE tg_id = ?", (target_id,)) as cursor:
+            res = await cursor.fetchone()
+            
+        if not res:
+            await callback.message.edit_text("⚠️ Ошибка: Пользователь не найден в базе данных.")
+            return
+            
+        current_sum, current_count = res
+        
+        # 2. Точный математический перерасчет: добавляем новую оценку к общей сумме
+        new_sum = current_sum + stars
+        new_count = current_count + 1
+        new_rating = round(float(new_sum) / float(new_count), 2)
+        
+        # 3. Записываем новые значения в профиль пользователя
+        await db.execute(
+            "UPDATE users SET rating_sum = ?, rating_count = ?, rating = ? WHERE tg_id = ?", 
+            (new_sum, new_count, new_rating, target_id)
+        )
+        await db.commit()
+        
+    # Схлопываем клавиатуру звезд, чтобы защитить от повторного нажатия
+    await callback.message.edit_text(f"✅ Спасибо! Вы успешно выставили оценку контрагенту: **⭐️ {stars}**.")
