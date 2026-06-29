@@ -13,11 +13,11 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
     
     # Разбираем callback: deal_open_[direct/guarantor]_[offer_id]
     parts = callback.data.split("_")
-    mode = parts        # Берем индекс 2: 'direct' или 'guarantor'
     
-    # ⚡ ИСПРАВЛЕНО: Берем ПОСЛЕДНИЙ элемент списка (индекс 2), где лежит текстовый ID объявления, 
-    # и только его превращаем в число
-    offer_id = int(parts) 
+    # ⚡ СТРОГОЕ ИСПРАВЛЕНИЕ: берём индекс 3 (четвертый элемент списка)
+    # Это гарантирует, что мы превращаем в число именно строку '15', а не весь список
+    offer_id = int(parts[3]) 
+    mode = parts[2]  # 'direct' или 'guarantor'
     
     # 🛡️ ЗАЩИТА: Проверяем, заполнил ли ПОКУПАТЕЛЬ реквизиты для этого направления
     async with aiosqlite.connect(DB_NAME) as db:
@@ -25,7 +25,7 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
             res_dir = await cursor.fetchone()
             
     if res_dir:
-        direction = res_dir
+        direction = res_dir[0]
         if not await has_required_requisites(buyer_id, direction):
             await callback.answer(
                 "⚠️ Отказано в сделке!\n\n"
