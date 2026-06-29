@@ -163,20 +163,20 @@ async def main():
     # Инициализируем структуру таблиц при запуске проекта
     await init_db()
     
-    # Подключаем защиту от забаненных пользователей на все типы входящих событий
+    # Подключаем защиту от забаненных пользователей
     dp.message.middleware(BanCheckMiddleware())
     dp.callback_query.middleware(BanCheckMiddleware())
     
-    # Подключаем роутеры всех наших модулей к главному диспетчеру
-    dp.include_router(verification.router)
-    dp.include_router(cabinet.router)
-    dp.include_router(offers.router)
-    dp.include_router(deals.router)
+    # СТРОГИЙ ПОРЯДОК ПОДКЛЮЧЕНИЯ РОУТЕРОВ (От легких к тяжелым)
+    dp.include_router(cabinet.router)       # 1. Личный кабинет (Реквизиты FSM)
+    dp.include_router(offers.router)        # 2. Торговый стакан заявок
+    dp.include_router(verification.router)  # 3. Верификация
+    dp.include_router(deals.router)         # 4. Сделки и Анонимный чат (в самом конце!)
     
-    # ЗАПУСКАЕМ АВТОМАТИЧЕСКИЙ ТАЙМЕР ОТМЕНЫ СДЕЛОК В ФОНЕ:
+    # Запускаем автоматический таймер отмены сделок в фоне
     asyncio.create_task(tasks.auto_cancel_expired_deals(bot))
     
-    print("База данных проверена. Фоновые таймауты запущены. Запуск пуллинга бота...")
+    print("Base checked. Background timers active. Starting polling...")
     await dp.start_polling(bot)
     
 @dp.message(lambda msg: msg.text == "/debug")
