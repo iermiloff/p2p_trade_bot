@@ -9,7 +9,7 @@ async def init_db():
         # Включаем режим WAL (Write-Ahead Logging) для предотвращения блокировок файла БД
         await db.execute("PRAGMA journal_mode=WAL;")
         
-        # Таблица пользователей (nickname строго UNIQUE) с поддержкой вечных и временных банов
+        # Обновленная таблица пользователей с поддержкой точной математики репутации
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 tg_id INTEGER PRIMARY KEY,
@@ -18,9 +18,11 @@ async def init_db():
                 user_status TEXT DEFAULT 'verified',
                 rating REAL DEFAULT 5.0,
                 deals_count INTEGER DEFAULT 0,
-                is_banned INTEGER DEFAULT 0,       -- 1 = вечный бан, 0 = чист
-                ban_until INTEGER DEFAULT 0,        -- Unix-время окончания временного бана
-                kyc_file_id TEXT DEFAULT NULL
+                is_banned INTEGER DEFAULT 0,       
+                ban_until INTEGER DEFAULT 0,        
+                kyc_file_id TEXT DEFAULT NULL,
+                rating_sum INTEGER DEFAULT 5,
+                rating_count INTEGER DEFAULT 1
             )''')
 
         # Таблица сохраненных реквизитов для ЛК
