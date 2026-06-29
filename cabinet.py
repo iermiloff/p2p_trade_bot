@@ -1,4 +1,5 @@
 import aiosqlite
+from config import ADMIN_IDS
 from aiogram import Router, F, types
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -22,11 +23,25 @@ def get_main_keyboard():
         [types.InlineKeyboardButton(text="🔄 Карты ⇄ Piastrix", callback_data="nav_card_piastrix")]
     ])
 
+from config import ADMIN_IDS  # Добавьте этот импорт в верхнюю часть файла cabinet.py
+
 @router.callback_query(F.data == "open_main_menu")
 async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    await callback.message.answer("🏠 Главное меню P2P платформы:", reply_markup=get_main_keyboard())
+    user_id = callback.from_user.id
+    
+    # ⚡ Если кнопку "Назад в меню" нажал админ, принудительно возвращаем его в админку
+    if user_id in ADMIN_IDS:
+        import admin
+        await callback.message.answer(
+            "🛠 **Панель управления Администратора P2P**\n\n"
+            "Выберите необходимый раздел для модерации платформы:",
+            reply_markup=admin.get_admin_keyboard()
+        )
+    else:
+        # Обычный пользователь возвращается к торговым разделам
+        await callback.message.answer("🏠 Главное меню P2P платформы:", reply_markup=get_main_keyboard())
 
 # --- РАЗДЕЛ: СТАТИСТИКА ---
 @router.callback_query(F.data == "lk_stats")
