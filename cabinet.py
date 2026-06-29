@@ -2,19 +2,18 @@ import aiosqlite
 from aiogram import Router, F, types
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import StateFilter  # ИМПОРТ СТРОГОГО ФИЛЬТРА AIOGRAM 3
 from database import DB_NAME
 from constants import STATUS_NAMES
 
 router = Router()
 
-# Состояния FSM для поочередного ввода реквизитов
 class RequisitesStates(StatesGroup):
     waiting_for_card = State()
     waiting_for_piastrix = State()
     waiting_for_ton = State()
 
 def get_main_keyboard():
-    """Генерация кнопок Главного меню для верифицированных пользователей"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⚙️ Мои Реквизиты", callback_data="lk_requisites")],
         [types.InlineKeyboardButton(text="📊 Моя Статистика", callback_data="lk_stats")],
@@ -23,11 +22,10 @@ def get_main_keyboard():
         [types.InlineKeyboardButton(text="🔄 Карты ⇄ Piastrix", callback_data="nav_card_piastrix")]
     ])
 
-# Возврат в главное меню
 @router.callback_query(F.data == "open_main_menu")
 async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-    await state.clear() # На всякий случай очищаем FSM при возврате в меню
+    await state.clear()
     await callback.message.answer("🏠 Главное меню P2P платформы:", reply_markup=get_main_keyboard())
 
 # --- РАЗДЕЛ: СТАТИСТИКА ---
@@ -60,7 +58,7 @@ async def show_statistics(callback: types.CallbackQuery):
         ])
         await callback.message.answer(text, reply_markup=kb)
 
-# --- РАЗДЕЛ: РЕКВИЗИТЫ (ОСНОВНОЕ ОКНО) ---
+# --- РАЗДЕЛ: РЕКВИЗИТЫ ---
 @router.callback_query(F.data == "lk_requisites")
 async def show_requisites_menu(callback: types.CallbackQuery):
     await callback.answer()
@@ -68,7 +66,6 @@ async def show_requisites_menu(callback: types.CallbackQuery):
     await render_requisites(callback.message, user_id)
 
 async def render_requisites(message: types.Message, user_id: int):
-    """Вспомогательная асинхронная функция отрисовки реквизитов из БД"""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
             "SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", 
@@ -78,7 +75,6 @@ async def render_requisites(message: types.Message, user_id: int):
             
     card, piastrix, ton = req_data if req_data else ("", "", "")
     
-    # Красивое форматирование для вывода пользователю
     card_display = card if card and card.strip() else "❌ Не указано"
     piastrix_display = piastrix if piastrix and piastrix.strip() else "❌ Не указано"
     ton_display = ton if ton and ton.strip() else "❌ Не указано"
@@ -98,45 +94,41 @@ async def render_requisites(message: types.Message, user_id: int):
         [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
     ])
     
-    # Перерисовываем текущее окно, чтобы интерфейс не прыгал от новых сообщений
     try:
         await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     except Exception:
-        # Если текст сообщения не изменился, редактирование вызовет ошибку, тогда просто шлем новое
         await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
-# --- БЛОК ИЗМЕНЕНИЯ РЕКВИЗИТОВ ---
+# --- БЛОК ХЭНДЛЕРОВ ИЗМЕНЕНИЯ С ИСПРАВЛЕННЫМИ ФИЛЬТРАМИ AIOGRAM 3 ---
 
-# 1. КАРТА
 @router.callback_query(F.data == "edit_card")
 async def edit_card_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(RequisitesStates.waiting_for_card)
     await callback.message.answer("💳 **Ввод карты:**\nПришлите в ответном сообщении номер вашей карты, название банка и имя получателя:")
 
-@router.message(RequisitesStates.waiting_for_card)
+# ИСПРАВЛЕНО: Явное указание StateFilter для Aiogram 3
+@router.message(StateFilter(RequisitesStates.waiting_for_card), F.text)
 async def edit_card_save(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
-    await state.clear() # Сбрасываем FSM
+    await state.clear()
     
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE requisites SET card = ? WHERE tg_id = ?", (text, user_id))
-        await db.commit() # Фиксируем в БД
+        await db.commit()
         
-    # Отправляем новое сообщение-подтверждение
-    await message.answer("✅ Реквизиты банковской карты успешно зафиксированы в системе!")
-    # Перерисовываем меню реквизитов, чтобы пользователь сразу увидел изменения
+    await message.answer("✅ Реквизиты банковской карты успешно сохранены!")
     await render_requisites(message, user_id)
 
-# 2. PIASTRIX
 @router.callback_query(F.data == "edit_piastrix")
 async def edit_piastrix_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(RequisitesStates.waiting_for_piastrix)
     await callback.message.answer("📱 **Ввод Piastrix:**\nПришлите в ответном сообщении номер вашего кошелька Piastrix (например, P12345678):")
 
-@router.message(RequisitesStates.waiting_for_piastrix)
+# ИСПРАВЛЕНО: Явное указание StateFilter для Aiogram 3
+@router.message(StateFilter(RequisitesStates.waiting_for_piastrix), F.text)
 async def edit_piastrix_save(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
@@ -146,17 +138,17 @@ async def edit_piastrix_save(message: types.Message, state: FSMContext):
         await db.execute("UPDATE requisites SET piastrix = ? WHERE tg_id = ?", (text, user_id))
         await db.commit()
         
-    await message.answer("✅ Реквизиты кошелька Piastrix успешно зафиксированы в системе!")
+    await message.answer("✅ Реквизиты Piastrix успешно сохранены!")
     await render_requisites(message, user_id)
 
-# 3. TON / GRAM
 @router.callback_query(F.data == "edit_ton")
 async def edit_ton_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(RequisitesStates.waiting_for_ton)
-    await callback.message.answer("💎 **Ввод TON:**\nПришлите ваш TON-адрес (EQ... / UQ...) и Memo через пробел (если Memo нужен):")
+    await callback.message.answer("💎 **Ввод TON:**\nПришлите ваш TON-адрес (EQ... / UQ...) и Memo через пробел (если он нужен):")
 
-@router.message(RequisitesStates.waiting_for_ton)
+# ИСПРАВЛЕНО: Явное указание StateFilter для Aiogram 3
+@router.message(StateFilter(RequisitesStates.waiting_for_ton), F.text)
 async def edit_ton_save(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     text = message.text.strip()
@@ -166,5 +158,5 @@ async def edit_ton_save(message: types.Message, state: FSMContext):
         await db.execute("UPDATE requisites SET ton = ? WHERE tg_id = ?", (text, user_id))
         await db.commit()
         
-    await message.answer("✅ Реквизиты TON (GRAM) успешно зафиксированы в системе!")
+    await message.answer("✅ Реквизиты TON (GRAM) успешно сохранены!")
     await render_requisites(message, user_id)
