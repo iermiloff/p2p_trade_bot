@@ -47,7 +47,6 @@ async def register_user_safely(tg_id: int) -> str:
                 # Никнейм перехватил другой поток/пользователь миллисекундой ранее.
                 # Транзакция автоматически откатилась, уходим на новую итерацию генерации.
                 continue
-
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     tg_id = message.from_user.id
@@ -61,8 +60,17 @@ async def cmd_start(message: types.Message):
             res = await cursor.fetchone()
             is_verified = res[0] if res else 0
 
+    # ⚡ ДОБАВЛЯЕМ АВТО-ВЕРИФИКАЦИЮ ДЛЯ АДМИНИСТРАТОРОВ:
+    if tg_id in ADMIN_IDS:
+        if not is_verified:
+            # Автоматически проставляем статус верификации в БД, если админ зашел впервые
+            async with aiosqlite.connect(DB_NAME) as db:
+                await db.execute("UPDATE users SET is_verified = 1, user_status = 'super_trader' WHERE tg_id = ?", (tg_id,))
+                await db.commit()
+            is_verified = 1
+
     if is_verified:
-        # Если верифицирован — отправляем красивое Главное Меню из личного кабинета
+        # Если верифицирован (или это админ) — отправляем красивое Главное Меню
         await message.answer(
             f"Добро пожаловать обратно, **{nickname}**!\n"
             f"Вы верифицированы и можете использовать P2P-обмен. Выберите нужный раздел:",
