@@ -207,14 +207,18 @@ async def admin_claim_deal(callback: types.CallbackQuery):
         await db.commit()
         
     await callback.message.edit_text(f"✅ Вы вошли в сделку #{deal_id} как официальный Гарант. Ваши сообщения в чате будут выделены.")
-
+    
 # --- БЕЗОПАСНЫЙ АНОНИМНЫЙ ЧАТ (РЕТРАНСЛЯТОР С МАСКИРОВКОЙ) ---
 @router.message(F.text & ~F.text.startswith("/"))
-async def anonymous_chat_relay(message: types.Message, bot: Bot):
+async def anonymous_chat_relay(message: types.Message, bot: Bot, state: str = None):
     sender_id = message.from_user.id
     
+    # ⚡ ВАЖНО: Если пользователь сейчас находится в процессе ввода FSM (например, пишет реквизиты),
+    # мы принудительно игнорируем этот хэндлер чата и передаем управление дальше!
+    if state is not None:
+        return
+        
     async with aiosqlite.connect(DB_NAME) as db:
-        # Ищем активную сделку, где участвует этот пользователь (в статусах чата)
         query = """
             SELECT id, buyer_id, seller_id, guarantor_id, status FROM deals 
             WHERE (buyer_id = ? OR seller_id = ? OR guarantor_id = ?) 
@@ -224,18 +228,18 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot):
             active_deal = await cursor.fetchone()
             
     if not active_deal:
-        return # Если пользователь пишет текст вне сделки — игнорируем
-        
+        # ⚡ ВАЖНО: Если у пользователя нет активной сделки, мы возвращаем специальный флаг,
+        # чтобы aiogram передал это текстовое сообщение другим роутерам (например, в кабинет)
+        return
+
     deal_id, buyer_id, seller_id, guarantor_id, status = active_deal
     
-    # Достаем анонимные никнеймы участников из базы данных для подстановки
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT tg_id, nickname FROM users WHERE tg_id IN (?, ?)", (buyer_id, seller_id)) as cursor:
             users_nicks = await cursor.fetchall()
             
     nicks_dict = {uid: name for uid, name in users_nicks}
     
-    # Определяем, кто пишет, и формируем защищенный префикс
     if sender_id == guarantor_id:
         prefix = f"⚡ **ГАРАНТ (Admin)]**:"
     elif sender_id == buyer_id:
@@ -247,7 +251,6 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot):
 
     full_message_text = f"{prefix} {message.text}"
     
-    # Формируем список получателей (отправляем всем, кроме самого себя)
     targets = [buyer_id, seller_id]
     if guarantor_id:
         targets.append(guarantor_id)
@@ -258,3 +261,4 @@ async def anonymous_chat_relay(message: types.Message, bot: Bot):
                 await bot.send_message(chat_id=target_id, text=full_message_text, parse_mode="Markdown")
             except Exception:
                 continue
+
