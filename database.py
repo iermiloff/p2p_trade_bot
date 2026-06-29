@@ -90,3 +90,29 @@ async def has_active_deal(tg_id: int) -> bool:
             
     return count > 0
 
+async def has_required_requisites(tg_id: int, direction: str) -> bool:
+    """
+    Проверяет, заполнены ли у пользователя необходимые реквизиты 
+    для работы в выбранном направлении обмена.
+    """
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", (tg_id,)) as cursor:
+            res = await cursor.fetchone()
+            
+    if not res:
+        return False
+        
+    card, piastrix, ton = res
+    
+    # В зависимости от направления проверяем нужные поля
+    if direction == "gram_card":
+        # Нужна и карта, и TON-кошелек
+        return bool(card and card.strip()) and bool(ton and ton.strip())
+    elif direction == "gram_piastrix":
+        # Нужен Piastrix и TON-кошелек
+        return bool(piastrix and piastrix.strip()) and bool(ton and ton.strip())
+    elif direction == "card_piastrix":
+        # Нужна карта и Piastrix
+        return bool(card and card.strip()) and bool(piastrix and piastrix.strip())
+        
+    return False
