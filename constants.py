@@ -7,5 +7,6 @@ STATUS_LIMITS = {
 STATUS_NAMES = {
     "verified": "🟢 Верифицированный",
     "trader": "🔥 Трейдер",
-    "super_trader": "⚡ Супер-трейдер"
+    "super_trader": "⚡ Супер-трейдер",
+    "guarantor_member": "🛡️ Гарант" 
 }
