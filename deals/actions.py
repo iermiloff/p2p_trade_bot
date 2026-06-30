@@ -129,23 +129,35 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await db.execute("UPDATE deals SET status = 'waiting_delivery', timer_start = ? WHERE id = ?", (current_time, deal_id))
             await db.commit()
             
-            kb_seller = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
-                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
-            ])
-            
+            # Редактируем сообщение Покупателя
             await callback.message.edit_text(
-                "🟩 **Вы подтвердили отправку средств контрагенту.**\n"
-                "Таймер оплаты успешно остановлен. Ожидаем встречного подтверждения от Продавца.\n"
+                "🟩 **Вы подтвердили отправку средств.**\n"
+                "Таймер оплаты успешно остановлен. Ожидаем подтверждения депонирования.\n"
                 "💬 Анонимный чат по-прежнему активен для отправки чеков."
             )
             
-            await bot.send_message(
-                chat_id=seller_id,
-                text=f"💰 Покупатель отметил сделку #{deal_id} как **ОПЛАЧЕННУЮ**.\nПроверьте ваш счет.\n⏳ Запущен **Таймер 3 (10 минут)**. Нажмите кнопку для завершения:",
-                reply_markup=kb_seller
-            )
+            if use_guarantor == 1:
+                # В сделке с Гарантом у Продавца НЕТ кнопок завершения! Он просто ждет команду от Гаранта.
+                await bot.send_message(
+                    chat_id=seller_id,
+                    text=f"💰 Покупатель отметил сделку #{deal_id} как **ОПЛАЧЕННУЮ** (средства отправлены Гаранту).\n"
+                         f"⚠️ **НЕ ОТПРАВЛЯЙТЕ** криптовалюту, пока Гарант не подтвердит получение фиата в анонимном чате!\n"
+                         f"⏳ Запущен Таймер 3. Ожидайте команду модератора платформы."
+                )
+            else:
+                # В прямой сделке Продавец получает стандартный пульт завершения
+                kb_seller = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
+                    [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                ])
+                await bot.send_message(
+                    chat_id=seller_id,
+                    text=f"💰 Покупатель отметил прямую сделку #{deal_id} как **ОПЛАЧЕННУЮ**.\nПроверьте ваш счет.\n"
+                         f"⏳ Запущен **Таймер 3 (10 минут)**. Нажмите кнопку для завершения обмена:",
+                    reply_markup=kb_seller
+                )
             return
+
 
         # --- Действие: Успешное закрытие прямой сделки Продавцом ---
         elif action == "completed" and user_id == seller_id and status == "waiting_delivery":
