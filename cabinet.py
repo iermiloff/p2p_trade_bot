@@ -87,14 +87,14 @@ async def show_user_history(callback: types.CallbackQuery):
     
     async with aiosqlite.connect(DB_NAME) as db:
         query = """
-            SELECT deals.id, deals.buyer_id, deals.status, offers.direction, offers.amount 
-            FROM deals
-            JOIN offers ON deals.offer_id = offers.id
-            WHERE deals.buyer_id = ? OR deals.seller_id = ?
-            ORDER BY deals.id DESC LIMIT 5
+            SELECT id, status, buyer_id, seller_id, use_guarantor, guarantor_id 
+            FROM deals 
+            WHERE (buyer_id = ? OR seller_id = ?) 
+            AND status IN ('waiting_payment', 'waiting_delivery', 'dispute')
         """
-        async with db.execute(query, (user_id, user_id)) as cursor:
-            my_history = await cursor.fetchall()
+        async with db.execute(query, (tg_id, tg_id)) as cursor:
+            active_deal = await cursor.fetchone()
+
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
@@ -259,13 +259,13 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
         await callback.message.edit_text("🔄 **У вас нет активных сделок на данный момент.**\nВсе обмены завершены или отменены.", reply_markup=kb_back)
         return
         
-    deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
+    deal_id, status, buyer_id, seller_id, use_guarantor, guarantor_id = active_deal
     kb = None
     role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
     
     if status == 'waiting_payment':
-        # 🛡️ АНТИ-ФРОД: Если сделка с Гарантом, но guarantor_id в кортеже (индекс 4) отсутствует/равен нулю
-        if use_guarantor == 1 and (active_deal[4] is None or active_deal[4] == 0 or not active_deal[4]):
+        # 🛡️ ЖЕСТКИЙ БЛОК ДЛЯ ЛК: Проверяем реальное присутствие Гаранта
+        if use_guarantor == 1 and (guarantor_id is None or guarantor_id == 0):
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")],
                 [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
