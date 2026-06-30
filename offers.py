@@ -6,7 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import StateFilter
 from config import ADMIN_IDS
 from database import DB_NAME, check_offer_limit, has_required_requisites, get_user_title
-from constants import STATUS_NAMES
+from constants import STATUS_NAMES, STATUS_LIMITS
 
 router = Router()
 
@@ -115,25 +115,37 @@ async def show_offers_list(callback: types.CallbackQuery):
         await callback.message.answer(offer_text, reply_markup=kb, parse_mode="Markdown")
 
 # --- ➕ ФУНКЦИОНАЛ СОЗДАНИЯ ЗАЯВОК (ВЕРНУЛИ И УЛУЧШИЛИ) ---
-
 @router.callback_query(F.data.startswith("create_start_"))
 async def start_create_offer(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = callback.from_user.id
     direction = callback.data.replace("create_start_", "")
     
-    # Жесткая блокировка торговых функций для Администраторов
     if user_id in ADMIN_IDS:
         await callback.message.answer(
             "⚠️ **Отказ системы:**\n"
-            "Учетным записям администраторов строго запрещено создавать торговые заявки. "
-            "Вы можете выступать только в роли Гаранта или контролировать платформу."
+            "Учетным записям администраторов строго запрещено создавать торговые заявки. Вы можете выступать только в роли Гаранта."
         )
         return
 
-    # Проверка лимитов на активные объявления в зависимости от ранга
-    if not await check_offer_limit(user_id):
-        await callback.message.answer("⚠️ Вы исчерпали лимит активных объявлений для вашего текущего ранга трейдера. Закройте старые ордера.")
+    # Извлекаем текущий ранг (user_status) пользователя из базы данных
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (user_id,)) as cursor:
+            res = await cursor.fetchone()
+            user_status = res[0] if res else "verified"
+
+    # 🎮 ГЕЙМИФИКАЦИЯ: Считаем активные лоты и сопоставляем с увеличенным лимитом текущего ранга!
+    current_active_count = await check_offer_limit(user_id)
+    max_allowed_limit = STATUS_LIMITS.get(user_status, 1)
+
+    # Жестко блокируем, только если количество реальных активных объявлений достигло или превысило лимит ранга
+    if current_active_count >= max_allowed_limit:
+        await callback.message.answer(
+            f"⚠️ **Превышен лимит объявлений!**\n\n"
+            f"Для вашего текущего ранга доступно максимум активных объявлений: **{max_allowed_limit}**.\n"
+            f"У вас в стакане уже открыто: **{current_active_count}**.\n\n"
+            f"Пожалуйста, дождитесь завершения текущих сделок, либо удалите/закройте ваши старые ордера через меню обмена."
+        )
         return
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
