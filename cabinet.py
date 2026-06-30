@@ -1,11 +1,20 @@
 import aiosqlite
+import time
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
-from config import ADMIN_IDS
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import StateFilter
+from config import ADMIN_IDS, ADMIN_CHAT_ID
 from database import DB_NAME, get_user_title
 from constants import STATUS_NAMES
 
 router = Router()
+
+# Состояния машины состояний (FSM) для пошагового ввода реквизитов
+class RequisitesStates(StatesGroup):
+    waiting_for_card = State()
+    waiting_for_piastrix = State()
+    waiting_for_ton = State()
 
 def get_main_keyboard():
     """Генерация кнопок Главного меню P2P-платформы"""
@@ -21,14 +30,13 @@ def get_main_keyboard():
         [types.InlineKeyboardButton(text="🔄 Карты ⇄ Piastrix", callback_data="nav_card_piastrix")]
     ])
 
-# --- ВОЗВРАТ В ГЛАВНОЕ МЕНЮ (СТРОГО РЕДАКТИРОВАНИЕМ) ---
+# --- ВОЗВРАТ В ГЛАВНОЕ МЕНЮ ИЛИ АДМИНКУ (СТРОГО РЕДАКТИРОВАНИЕМ) ---
 @router.callback_query(F.data == "open_main_menu")
 async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     user_id = callback.from_user.id
     
-    # Защита: Если кнопку нажал админ, возвращаем его в админку
     if user_id in ADMIN_IDS:
         import admin
         await callback.message.edit_text(
@@ -36,10 +44,7 @@ async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
             reply_markup=admin.get_admin_keyboard()
         )
     else:
-        # Обычный пользователь возвращается к торговым разделам без нового сообщения
         await callback.message.edit_text("🏠 **Главное меню P2P платформы:**", reply_markup=get_main_keyboard())
-
-
 # --- РАЗДЕЛ: ПРОСМОТР ЛИЧНОЙ СТАТИСТИКИ И ТИТУЛА ---
 @router.callback_query(F.data == "lk_stats")
 async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
@@ -99,7 +104,7 @@ async def show_user_history(callback: types.CallbackQuery):
         await callback.message.edit_text("📜 Ваша история сделок пока пуста. Вы еще не совершали обменов.", reply_markup=kb)
         return
 
-    text = "📜 **Вашие последние 5 P2P-сделок:**\n\n"
+    text = "📜 **Ваши последние 5 P2P-сделок:**\n\n"
     for d_id, b_id, status, direction, amount in my_history:
         role = "Покупатель 🟩" if user_id == b_id else "Продавец 🟥"
         
@@ -119,7 +124,6 @@ async def show_user_history(callback: types.CallbackQuery):
                 f"  └ Статус: {st_text}\n\n"
 
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-
 
 # --- РАЗДЕЛ: НАСТРОЙКА РЕКВИЗИТОВ (СТРОГО НА ОДНОМ ЭКРАНЕ) ---
 @router.callback_query(F.data == "lk_requisites")
@@ -151,7 +155,86 @@ async def show_requisites_menu(callback: types.CallbackQuery, state: FSMContext)
     
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 
+# --- ХЭНДЛЕРЫ НАЖАТИЯ КНОПОК ИЗМЕНЕНИЯ РЕКВИЗИТОВ ---
+@router.callback_query(F.data == "req_edit_card")
+async def edit_card_init(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(RequisitesStates.waiting_for_card)
+    await callback.message.edit_text("✍️ Введите и отправьте сообщением ваш номер банковской карты / название банка:")
+
+@router.callback_query(F.data == "req_edit_piastrix")
+async def edit_piastrix_init(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(RequisitesStates.waiting_for_piastrix)
+    await callback.message.edit_text("✍️ Введите и отправьте сообщением ваш кошелек Piastrix (начинается с P...):")
+
+@router.callback_query(F.data == "req_edit_ton")
+async def edit_ton_init(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(RequisitesStates.waiting_for_ton)
+    await callback.message.edit_text("✍️ Введите и отправьте сообщением ваш анонимный адрес TON:")
+
+# --- ХЭНДЛЕРЫ ПРИЕМА ТЕКСТА И ЗАПИСИ В БАЗУ ДАННЫХ ---
+
+@router.message(StateFilter(RequisitesStates.waiting_for_card), F.text)
+async def process_card_saving(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    user_id = message.from_user.id
+    await state.clear()
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE requisites SET card = ? WHERE tg_id = ?", (text, user_id))
+        await db.commit()
+        
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⚙️ Вернуться в Реквизиты", callback_data="lk_requisites")]])
+    await message.answer("✅ **Банковские карты успешно обновлены в базе данных!**", reply_markup=kb, parse_mode="Markdown")
+
+
+@router.message(StateFilter(RequisitesStates.waiting_for_piastrix), F.text)
+async def process_piastrix_saving(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    user_id = message.from_user.id
+    await state.clear()
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE requisites SET piastrix = ? WHERE tg_id = ?", (text, user_id))
+        await db.commit()
+        
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⚙️ Вернуться в Реквизиты", callback_data="lk_requisites")]])
+    await message.answer("✅ **Кошелек Piastrix успешно сохранен в базе данных!**", reply_markup=kb, parse_mode="Markdown")
+
+
+@router.message(StateFilter(RequisitesStates.waiting_for_ton), F.text)
+async def process_ton_saving(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    user_id = message.from_user.id
+    await state.clear()
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE requisites SET ton = ? WHERE tg_id = ?", (text, user_id))
+        await db.commit()
+        
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⚙️ Вернуться в Реквизиты", callback_data="lk_requisites")]])
+    await message.answer("✅ **Адрес TON Wallet успешно привязан к вашему профилю!**", reply_markup=kb, parse_mode="Markdown")
+
+
 # --- КНОПКА ВОЗВРАТА В АКТИВНУЮ СДЕЛКУ ИЗ ГЛАВНОГО МЕНЮ ---
+
 @router.callback_query(F.data == "lk_active_deals")
 async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
@@ -180,7 +263,6 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
     kb = None
     role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
     
-    # ⚡ ГЕНЕРИРУЕМ ПУЛЬТ УПРАВЛЕНИЯ ПРЯМО ТУТ (Аналогично коду из main.py):
     if status == 'waiting_payment':
         if tg_id == buyer_id:
             btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
@@ -217,7 +299,6 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
         'dispute': 'Внештатная ситуация (Открыт спор)'
     }
 
-    # Бесшовно перерисовываем экран ЛК в пульт управления активной сделкой!
     await callback.message.edit_text(
         f"🔄 **Вы перешли в вашу активную сделку #{deal_id}!**\n\n"
         f"👤 Ваша роль: **{role_text}**\n"
@@ -227,4 +308,3 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
         reply_markup=kb,
         parse_mode="Markdown"
     )
-
