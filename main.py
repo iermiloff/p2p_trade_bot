@@ -102,16 +102,27 @@ async def cmd_start(message: types.Message):
         kb = None
         role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
         
+        # --- ФАЗА 1: ОЖИДАНИЕ ОПЛАТЫ ОТ ПОКУПАТЕЛЯ ---
         if status == 'waiting_payment':
-            if tg_id == buyer_id:
-                btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+            # 🛡️ АНТИ-ФРОД: Если сделка через Гаранта, но сам Гарант её еще НЕ взял (guarantor_id пустой)
+            if use_guarantor == 1 and (active_deal[4] is None or active_deal[4] == 0 or not active_deal[4]):
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")]
+                    [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")]
                 ])
-            elif tg_id == seller_id:
-                kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")]
-                ])
+                status_text_addon = "\n\n⚠️ **Внимание:** Сделка проходит через Гаранта. Пожалуйста, ничего не переводите, пока Гарант не подключится к анонимному чату и не скинет свои реквизиты!"
+            else:
+                # Гарант уже зашел (или сделка прямая) — выдаем стандартные пульты
+                status_text_addon = ""
+                if tg_id == buyer_id:
+                    btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")]
+                    ])
+                elif tg_id == seller_id:
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")]
+                    ])
+
         elif status == 'waiting_delivery':
             if tg_id == seller_id:
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
@@ -132,16 +143,16 @@ async def cmd_start(message: types.Message):
             'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
             'dispute': 'Внештатная ситуация (Открыт спор)'
         }
-
         await message.answer(
             f"🔄 **Вы вернулись в активную сделку #{deal_id}!**\n\n"
             f"👤 Ваша роль: **{role_text}**\n"
             f"📊 Текущий статус: _{status_labels.get(status, status)}_\n"
-            f"💬 Анонимный чат по-прежнему активен.\n\n"
-            f"Если кнопки управления пропали, используйте панель ниже:",
+            f"💬 Анонимный чат по-прежнему активен.{status_text_addon}\n\n"
+            f"Актуальная панель управления вашим обменом:",
             reply_markup=kb,
             parse_mode="Markdown"
         )
+
         return
 
     # ⚡ 2. ЕСЛИ АКТИВНОЙ СДЕЛКИ НЕТ — ВЫДАЕМ СООТВЕТСТВУЮЩЕЕ МЕНЮ
