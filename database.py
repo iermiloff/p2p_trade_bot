@@ -80,32 +80,15 @@ async def has_active_deal(tg_id: int) -> bool:
             return res[0] > 0 if res else False
 
 
-async def check_offer_limit(tg_id: int) -> bool:
+async def check_offer_limit(tg_id: int) -> int:
     """
-    Проверяет, может ли пользователь создать новое объявление в стакане
-    на основе лимитов его текущего ранга/статуса.
+    Возвращает точное количество текущих активных объявлений пользователя в стакане.
+    Игнорирует любые ордера, которые уже закрыты, отменены или находятся в сделке.
     """
-    from constants import STATUS_LIMITS
-    
     async with aiosqlite.connect(DB_NAME) as db:
-        # Узнаем статус/ранг пользователя в системе
-        async with db.execute("SELECT user_status, deals_count, rating FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
-            user = await cursor.fetchone()
-            
-        if not user:
-            return False
-            
-        user_status, deals_count, rating = user
-        
-        # ⚡ ИСПРАВЛЕНО: Считаем только РЕАЛЬНО АКТИВНЫЕ объявления в стакане
         async with db.execute("SELECT COUNT(*) FROM offers WHERE creator_id = ? AND status = 'active'", (tg_id,)) as cursor:
-            active_offers_count = (await cursor.fetchone())[0]
-            
-    # Получаем жесткий лимит для этого ранга изconstants.py (если нет — берем дефолт 1)
-    max_limit = STATUS_LIMITS.get(user_status, 1)
-    
-    # Если текущих активных объявлений меньше лимита — разрешаем создание (True)
-    return active_offers_count < max_limit
+            res = await cursor.fetchone()
+            return res[0] if res else 0
 
 async def has_required_requisites(tg_id: int, direction: str) -> bool:
     """
