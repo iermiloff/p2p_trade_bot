@@ -48,6 +48,7 @@ async def start_verification_cmd(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(VerificationStates.waiting_for_data)
     await callback.message.answer("📥 Пожалуйста, отправьте скан/фотографию вашего документа или введите текстовые данные для проверки администрацией:")
 
+# Измените parse_mode с Markdown на HTML в хэндлере process_verification_data:
 @router.message(VerificationStates.waiting_for_data)
 async def process_verification_data(message: types.Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
@@ -71,25 +72,30 @@ async def process_verification_data(message: types.Message, state: FSMContext, b
         ]
     ])
     
+    # Защищаем текст от ломающих HTML-символов (< и >)
+    full_name_clean = message.from_user.full_name.replace("<", "&lt;").replace(">", "&gt;")
+    username_text = f" | @{message.from_user.username}" if message.from_user.username else ""
+    
     for admin_id in ADMIN_IDS:
         try:
-            # Формируем кликабельную ссылку на реальный профиль для админов
-            user_mention = f"[{message.from_user.full_name}](tg://user?id={user_id})"
-            username_text = f" | @{message.from_user.username}" if message.from_user.username else ""
-            
+            # ⚡ ИСПРАВЛЕНО: Используем пуленепробиваемый HTML-формат ссылки на профиль
             await bot.send_message(
                 chat_id=admin_id,
-                text=f"🔔 **Новая заявка на верификацию!**\n"
-                     f"Профиль: {user_mention}{username_text}\n"
-                     f"ID пользователя: `{user_id}`\n",
+                text=f"🔔 <b>Новая заявка на верификацию!</b>\n\n"
+                     f"Профиль: <a href='tg://user?id={user_id}'>{full_name_clean}</a>{username_text}\n"
+                     f"ID пользователя: <code>{user_id}</code>\n",
                 reply_markup=kb,
-                parse_mode="Markdown"
+                parse_mode="HTML"  # Переключили на HTML
             )
+            
             if message.photo:
                 await bot.send_photo(chat_id=admin_id, photo=file_id, caption=message.caption)
             else:
-                await bot.send_message(chat_id=admin_id, text=f"Данные заявки:\n{message.text}")
-        except Exception:
+                # Защищаем текст заявки, если юзер прислал только буквы
+                msg_text_clean = message.text.replace("<", "&lt;").replace(">", "&gt;") if message.text else ""
+                await bot.send_message(chat_id=admin_id, text=f"Данные заявки:\n{msg_text_clean}")
+        except Exception as e:
+            print(f"[ФАТАЛЬНАЯ ОШИБКА ОТПРАВКИ АЛЕРТА АДМИНУ {admin_id}]: {e}")
             continue
 
 @router.callback_query(F.data.startswith("verify_approve_"))
