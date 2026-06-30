@@ -4,16 +4,26 @@ from aiogram.filters import Command
 from config import ADMIN_IDS
 from database import DB_NAME
 from constants import STATUS_NAMES
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.filters import StateFilter
+
+class AdminManageStates(StatesGroup):
+    waiting_for_user_id = State()
+    waiting_for_ban_time = State()
 
 router = Router()
 
 def get_admin_keyboard():
+    """Клавиатура главного меню админ-панели"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="📈 Общая статистика", callback_data="admin_stats")],
         [types.InlineKeyboardButton(text="📋 Заявки на верификацию", callback_data="admin_view_kyc")],
+        [types.InlineKeyboardButton(text="⚙️ Управление пользователем", callback_data="admin_manage_user_start")],
         [types.InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin_view_users")],
         [types.InlineKeyboardButton(text="🚫 Список забаненных", callback_data="admin_view_banned")]
     ])
+
 
 @router.message(Command("admin"))
 async def cmd_admin_panel(message: types.Message):
@@ -143,3 +153,144 @@ async def back_to_admin_callback(callback: types.CallbackQuery):
     await callback.answer()
     await callback.message.edit_text("🛠 **Панель управления Администратора P2P**\n\nВыберите необходимый раздел для модерации платформы:", reply_markup=get_admin_keyboard())
 
+# --- МОДУЛЬ РУЧНОГО УПРАВЛЕНИЯ ПОЛЬЗОВАТЕЛЯМИ (БЕЗ ТЕКСТОВЫХ КОМАНД) ---
+
+# 1. Старт процесса: запрашиваем ID
+@router.callback_query(F.data == "admin_manage_user_start")
+async def admin_manage_user_init(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AdminManageStates.waiting_for_user_id)
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_to_admin")]])
+    await callback.message.edit_text(
+        "⚙️ **Управление пользователем**\n\n"
+        "Пришлите в ответном сообщении численный **Telegram ID** пользователя, которого вы хотите забанить, разбанить или изменить ему ранг:",
+        reply_markup=kb
+    )
+
+# 2. Ловим введенный ID и выводим пульт модератора
+@router.message(StateFilter(AdminManageStates.waiting_for_user_id), F.text)
+async def admin_render_user_control_panel(message: types.Message, state: FSMContext):
+    user_text = message.text.strip()
+    
+    if not user_text.isdigit():
+        await message.answer("⚠️ Ошибка: ID должен состоять только из цифр. Попробуйте еще раз:")
+        return
+        
+    target_id = int(user_text)
+    await state.clear() # Очищаем стейт, так как ID получен
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT nickname, user_status, rating, deals_count, is_banned, ban_until FROM users WHERE tg_id = ?", (target_id,)) as cursor:
+            user_data = await cursor.fetchone()
+            
+    if not user_data:
+        await message.answer("❌ Пользователь с таким ID не найден в базе данных бота. Проверьте цифры.")
+        return
+        
+    nick, status, rating, deals, is_banned, ban_until = user_data
+    status_text = STATUS_NAMES.get(status, status)
+    
+    # Формируем статус блокировки
+    if is_banned == 1: ban_status = "⛔ Вечный бан"
+    elif ban_until > int(time.time()): ban_status = f"⏳ Временный бан до {time.strftime('%d.%m %H:%M', time.localtime(ban_until))}"
+    else: ban_status = "🟢 Чист / Активен"
+    
+    # Пульт управления кнопками
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(text="⛔ Пермбан", callback_data=f"usrmng_permban_{target_id}"),
+            types.InlineKeyboardButton(text="⏳ Темпбан", callback_data=f"usrmng_tempban_{target_id}"),
+            types.InlineKeyboardButton(text="✅ Разбанить", callback_data=f"usrmng_unban_{target_id}")
+        ],
+        [types.InlineKeyboardButton(text="🎖 Изменить Ранг / Роль", callback_data=f"usrmng_setrole_{target_id}")],
+        [types.InlineKeyboardButton(text="⬅️ В главное меню админки", callback_data="back_to_admin")]
+    ])
+    
+    real_profile_link = f"[{nick}](tg://user?id={target_id})"
+    await message.answer(
+        f"👤 **КАРТОЧКА МОДЕРАЦИИ ПОЛЬЗОВАТЕЛЯ:**\n\n"
+        f"• Профиль: {real_profile_link}\n"
+        f"• ID: `{target_id}`\n"
+        f"• Текущий ранг: **{status_text}**\n"
+        f"• Репутация: ⭐ {rating:.1f} | 🤝 Сделок: {deals}\n"
+        f"• Статус ограничений: **{ban_status}**\n\n"
+        f"Выберите необходимое действие на панели ниже:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+# 3. Обработка кнопок Блокировок
+@router.callback_query(F.data.startswith("usrmng_"))
+async def admin_process_user_moderation_buttons(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    parts = callback.data.split("_")
+    action = parts[1] # 'permban', 'tempban', 'unban', 'setrole', 'saverole'
+    target_id = int(parts[2])
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        # А: Вечный бан
+        if action == "permban":
+            await db.execute("UPDATE users SET is_banned = 1 WHERE tg_id = ?", (target_id,))
+            await db.commit()
+            await callback.message.answer(f"⛔ Пользователь `{target_id}` заблокирован НАВСЕГДА.")
+            
+        # Б: Снятие всех банов
+        elif action == "unban":
+            await db.execute("UPDATE users SET is_banned = 0, ban_until = 0 WHERE tg_id = ?", (target_id,))
+            await db.commit()
+            await callback.message.answer(f"✅ Все ограничения с пользователя `{target_id}` полностью сняты.")
+            
+        # В: Временный бан (запрашиваем время)
+        elif action == "tempban":
+            await state.set_state(AdminManageStates.waiting_for_ban_time)
+            await state.update_data(target_id=target_id)
+            await callback.message.answer("⏳ **Ввод времени бана:**\nПришлите количество минут, на которое нужно заблокировать пользователя:")
+            return
+            
+        # Г: Вызов меню смены ролей
+        elif action == "setrole":
+            kb_roles = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🟢 Верифицированный", callback_data=f"usrmng_saverole_{target_id}_verified")],
+                [types.InlineKeyboardButton(text="🔥 Трейдер", callback_data=f"usrmng_saverole_{target_id}_trader")],
+                [types.InlineKeyboardButton(text="⚡ Супер-трейдер", callback_data=f"usrmng_saverole_{target_id}_super_trader")],
+                [types.InlineKeyboardButton(text="🛡️ Гарант Комьюнити", callback_data=f"usrmng_saverole_{target_id}_guarantor_member")],
+                [types.InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_admin")]
+            ])
+            await callback.message.edit_text("🎖 **Выбор нового ранга для пользователя:**", reply_markup=kb_roles)
+            return
+            
+        # Д: Сохранение нового ранга
+        elif action == "saverole":
+            new_role = parts[3]
+            await db.execute("UPDATE users SET user_status = ? WHERE tg_id = ?", (new_role, target_id))
+            await db.commit()
+            
+            role_title = STATUS_NAMES.get(new_role, new_role)
+            await callback.message.edit_text(f"🎉 Ранг пользователя `{target_id}` успешно изменен на: **{role_title}**.")
+            
+            # Оповещаем пользователя, если он не забанен
+            try:
+                await bot.send_message(chat_id=target_id, text=f"🔔 Администратор обновил ваш статус на платформе!\nВаш новый ранг: **{role_title}**.")
+            except Exception: pass
+
+# 4. Ловим ввод минут для темпбана
+@router.message(StateFilter(AdminManageStates.waiting_for_ban_time), F.text)
+async def admin_save_tempban_time(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("⚠️ Ошибка: Введите число минут цифрами:")
+        return
+        
+    minutes = int(text)
+    data = await state.get_data()
+    target_id = data["target_id"]
+    await state.clear()
+    
+    ban_timestamp = int(time.time()) + (minutes * 60)
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET ban_until = ? WHERE tg_id = ?", (ban_timestamp, target_id))
+        await db.commit()
+        
+    await message.answer(f"⏳ Пользователь `{target_id}` успешно заблокирован на **{minutes}** минут.")
