@@ -63,38 +63,49 @@ async def init_db():
             )''')
         await db.commit()
 
-async def check_offer_limit(tg_id: int) -> bool:
-    """Защита продавцов: Проверяет, может ли пользователь создать новую заявку по своему лимиту"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
-            res = await cursor.fetchone()
-            user_status = res[0] if res else "verified"
-            
-        async with db.execute(
-            "SELECT COUNT(*) FROM offers WHERE creator_id = ? AND status = 'active'", 
-            (tg_id,)
-        ) as cursor:
-            res = await cursor.fetchone()
-            active_offers_count = res[0] if res else 0
-            
-    max_limit = STATUS_LIMITS.get(user_status, 3)
-    return active_offers_count < max_limit
-
 async def has_active_deal(tg_id: int) -> bool:
-    """Защита продавцов от флуда сделками: Проверяет, есть ли у покупателя незавершенная сделка в моменте"""
+    """
+    Проверяет, находится ли пользователь в процессе активного обмена прямо сейчас.
+    Игнорирует завершенные (completed) и отмененные (cancelled) ордера.
+    """
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            """
+        # ⚡ ИСПРАВЛЕНО: Считаем активными ТОЛЬКО живые торговые фазы
+        query = """
             SELECT COUNT(*) FROM deals 
             WHERE (buyer_id = ? OR seller_id = ?) 
-            AND status NOT IN ('completed', 'cancelled')
-            """, 
-            (tg_id, tg_id)
-        ) as cursor:
+            AND status IN ('waiting_seller', 'waiting_payment', 'waiting_delivery', 'dispute')
+        """
+        async with db.execute(query, (tg_id, tg_id)) as cursor:
             res = await cursor.fetchone()
-            count = res[0] if res else 0
+            return res[0] > 0 if res else False
+
+
+async def check_offer_limit(tg_id: int) -> bool:
+    """
+    Проверяет, может ли пользователь создать новое объявление в стакане
+    на основе лимитов его текущего ранга/статуса.
+    """
+    from constants import STATUS_LIMITS
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Узнаем статус/ранг пользователя в системе
+        async with db.execute("SELECT user_status, deals_count, rating FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
+            user = await cursor.fetchone()
             
-    return count > 0
+        if not user:
+            return False
+            
+        user_status, deals_count, rating = user
+        
+        # ⚡ ИСПРАВЛЕНО: Считаем только РЕАЛЬНО АКТИВНЫЕ объявления в стакане
+        async with db.execute("SELECT COUNT(*) FROM offers WHERE creator_id = ? AND status = 'active'", (tg_id,)) as cursor:
+            active_offers_count = (await cursor.fetchone())[0]
+            
+    # Получаем жесткий лимит для этого ранга изconstants.py (если нет — берем дефолт 1)
+    max_limit = STATUS_LIMITS.get(user_status, 1)
+    
+    # Если текущих активных объявлений меньше лимита — разрешаем создание (True)
+    return active_offers_count < max_limit
 
 async def has_required_requisites(tg_id: int, direction: str) -> bool:
     """
