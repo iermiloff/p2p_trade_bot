@@ -54,6 +54,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
                 ])
+                # Извлекаем данные объявления для красивого алерта Гаранту
                 async with db.execute("SELECT direction, amount FROM offers WHERE id = ?", (offer_id,)) as o_cur:
                     o_res = await o_cur.fetchone()
                 o_dir = o_res[0] if o_res else "Неизвестно"
@@ -63,18 +64,20 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
                     rows = await g_cursor.fetchall()
                     for row in rows:
-                        if row[0] not in all_guarantor_ids: 
-                            all_guarantor_ids.append(row[0])
+                        g_uid = row[0]  # Достаем число из кортежа (12345678,) -> 12345678
+                        if g_uid not in all_guarantor_ids: 
+                            all_guarantor_ids.append(g_uid)
 
-                for receiver_id in all_guarantor_ids:
-                    try:
-                        await bot.send_message(
-                            chat_id=receiver_id, 
-                            text=f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{o_dir}`\nСумма: `{o_amt}`", 
-                            reply_markup=kb_admin
-                        )
-                    except: 
-                        continue
+                # Умный адаптивный алерт (группа модераторов или ЛС)
+                alert_g_text = f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{o_dir}`\nСумма: `{o_amt}`"
+                
+                if ADMIN_CHAT_ID != 0:
+                    try: await bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_g_text, reply_markup=kb_admin)
+                    except: pass
+                else:
+                    for receiver_id in all_guarantor_ids:
+                        try: await bot.send_message(chat_id=receiver_id, text=alert_g_text, reply_markup=kb_admin)
+                        except: continue
                 return
 
             # ВЕТКА Б: ОБЫЧНАЯ ПРЯМАЯ СДЕЛКА
