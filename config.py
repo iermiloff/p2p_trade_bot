@@ -16,3 +16,6 @@ ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdig
 
 if not ADMIN_IDS:
     print("ВНИМАНИЕ: Список ADMIN_IDS пуст. Функции гаранта и верификации будут недоступны!")
+
+REQUIRED_CHANNEL_ID = int(os.getenv("REQUIRED_CHANNEL_ID", "0"))
+CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "https://t.me+")
