@@ -95,31 +95,52 @@ async def cmd_start(message: types.Message):
         async with db.execute(query, (tg_id, tg_id)) as cursor:
             active_deal = await cursor.fetchone()
 
-    if active_deal:
-        deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
-        kb = None
-        role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
-        
-        if status == 'waiting_payment' and tg_id == buyer_id:
-            btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")]
-            ])
-        elif status == 'waiting_delivery' and tg_id == seller_id:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
-                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
-            ])
-        elif status == 'waiting_delivery' and tg_id == buyer_id:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
-            ])
+        if active_deal:
+            deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
+            kb = None
+            role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
+            
+            # --- СТАТУС 1: ОЖИДАНИЕ ОПЛАТЫ ---
+            if status == 'waiting_payment':
+                if tg_id == buyer_id:
+                    # Покупатель видит кнопку подтверждения перевода
+                    btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")]
+                    ])
+                elif tg_id == seller_id:
+                    # ⚡ ИСПРАВЛЕНО: Продавец видит понятную заглушку и не паникует
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")]
+                    ])
 
-        status_labels = {
-            'waiting_payment': 'Ожидание оплаты от Покупателя',
-            'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
-            'dispute': 'Внештатная ситуация (Открыт спор)'
-        }
+            # --- СТАТУС 2: ОЖИДАНИЕ ДОСТАВКИ/ВЫДАЧИ ---
+            elif status == 'waiting_delivery':
+                if tg_id == seller_id:
+                    # Продавец закрывает сделку или вызывает спор
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
+                        [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                    ])
+                elif tg_id == buyer_id:
+                    # Покупатель может только открыть спор, если продавец затягивает
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                    ])
+
+            # --- СТАТУС 3: ДИСПУТ (СПОР) ---
+            elif status == 'dispute':
+                # Обе стороны видят заглушку, так как делом занят арбитраж
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🚨 Спор модерируется Гарантом", callback_data="dummy_dispute_mode")]
+                ])
+
+            status_labels = {
+                'waiting_payment': 'Ожидание оплаты от Покупателя',
+                'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
+                'dispute': 'Внештатная ситуация (Открыт спор)'
+            }
+
 
         await message.answer(
             f"🔄 **Вы вернулись в активную сделку #{deal_id}!**\n\n"
