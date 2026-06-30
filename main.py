@@ -96,23 +96,16 @@ async def cmd_start(message: types.Message):
             active_deal = await cursor.fetchone()
 
     if active_deal:
-        # ⚡ ИСПРАВЛЕНО: Явная распаковка кортежа намертво связывает deal_id со значением из базы данных!
-        deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
-        
-        kb = None
-        role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
-        
-    if active_deal:
-        # Распаковываем все 6 полей
+        # Распаковываем все 6 полей из базы данных
         deal_id, status, buyer_id, seller_id, use_guarantor, guarantor_id = active_deal
         
         kb = None
         role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
-        status_text_addon = ""
+        status_text_addon = ""  # ⚡ ИСПРАВЛЕНО: Объявляем переменную здесь! Теперь она доступна при любом статусе
         
         # --- ФАЗА 1: ОЖИДАНИЕ ОПЛАТЫ ОТ ПОКУПАТЕЛЯ ---
         if status == 'waiting_payment':
-            # 🛡️ ЖЕСТКИЙ БЛОК: Сделка с Гарантом, но поле guarantor_id в базе пустует (None или 0)
+            # 🛡️ АНТИ-ФРОД БЛОК: Сделка с Гарантом, но guarantor_id в базе еще пустует (None или 0)
             if use_guarantor == 1 and (guarantor_id is None or guarantor_id == 0):
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")]
@@ -130,16 +123,26 @@ async def cmd_start(message: types.Message):
                         [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")]
                     ])
 
+        # --- ФАЗА 2: ОЖИДАНИЕ ВЫДАЧИ/ДОСТАВКИ ОТ ПРОДАВЦА ---
         elif status == 'waiting_delivery':
             if tg_id == seller_id:
-                kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
-                    [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
-                ])
+                if use_guarantor == 1:
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="⏳ Ожидайте, Гарант проверяет чек и выпускает средства", callback_data="dummy_g_processing")],
+                        [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                    ])
+                else:
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
+                        [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
+                    ])
             elif tg_id == buyer_id:
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="⏳ Ожидайте выдачи монет от Продавца", callback_data="dummy_waiting_coins")],
                     [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
                 ])
+
+        # --- ФАЗА 3: ОТКРЫТ ОФИЦИАЛЬНЫЙ СПОР (ДИСПУТ) ---
         elif status == 'dispute':
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text="🚨 Спор модерируется Гарантом", callback_data="dummy_dispute_mode")]
@@ -147,9 +150,10 @@ async def cmd_start(message: types.Message):
 
         status_labels = {
             'waiting_payment': 'Ожидание оплаты от Покупателя',
-            'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
+            'waiting_delivery': 'Ожидание подтверждения/выдачи',
             'dispute': 'Внештатная ситуация (Открыт спор)'
         }
+
         await message.answer(
             f"🔄 **Вы вернулись в активную сделку #{deal_id}!**\n\n"
             f"👤 Ваша роль: **{role_text}**\n"
@@ -159,7 +163,6 @@ async def cmd_start(message: types.Message):
             reply_markup=kb,
             parse_mode="Markdown"
         )
-
         return
 
     # ⚡ 2. ЕСЛИ АКТИВНОЙ СДЕЛКИ НЕТ — ВЫДАЕМ СООТВЕТСТВУЮЩЕЕ МЕНЮ
