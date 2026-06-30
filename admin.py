@@ -405,10 +405,9 @@ async def admin_restore_guarantor_panel(callback: types.CallbackQuery, state: FS
     b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
     s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не gracious")
     
-    # Регенерируем пульт управления с кнопками, которые мы починили в deals/guarantor.py
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
-        [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")],
+        [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"guarantor_complete_{deal_id}")],
+        [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"guarantor_cancel_{deal_id}")],
         [types.InlineKeyboardButton(text="⬅️ Вернуться в админку", callback_data="back_to_admin")]
     ])
     
