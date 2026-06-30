@@ -2,7 +2,7 @@ import asyncio
 import random
 import time
 import aiosqlite
-from aiogram import Bot, Dispatcher, types, Router
+from aiogram import Bot, F, Dispatcher, types, Router
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN, ADMIN_IDS
