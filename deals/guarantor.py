@@ -4,7 +4,6 @@ from config import ADMIN_IDS
 from database import DB_NAME, is_user_guarantor
 
 router = Router()
-
 # --- ВХОД АДМИНИСТРАТОРА ИЛИ ГАРАНТА КОМЬЮНИТИ В СДЕЛКУ ---
 @router.callback_query(F.data.startswith("admin_claim_deal_"))
 async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
@@ -15,15 +14,30 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     
     # 1. Защита от конфликта гарантов
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as cursor:
-            res_g = await cursor.fetchone()
+        async with db.execute("SELECT guarantor_id, buyer_id, seller_id FROM deals WHERE id = ?", (deal_id,)) as cursor:
+            deal_data = await cursor.fetchone()
             
-    if res_g and res_g is not None:
-        if res_g != user_id:
+    if not deal_data:
+        await callback.answer("❌ Сделка не найдена в системе.", show_alert=True)
+        return
+        
+    # Распаковываем кортеж из базы данных
+    current_guarantor_id, buyer_id, seller_id = deal_data
+            
+    # ⚡ ИСПРАВЛЕНО: Четко проверяем, что в поле реально записан ID другого живого человека
+    if current_guarantor_id is not None and current_guarantor_id != 0:
+        if current_guarantor_id != user_id:
             await callback.answer("❌ Эта сделка уже взята другим Гарантом!", show_alert=True)
-            try: await callback.message.edit_text(f"🔒 Сделка #{deal_id} уже обрабатывается другим Гарантом.")
-            except Exception: pass
+            try: 
+                await callback.message.edit_text(f"🔒 Сделка #{deal_id} уже обрабатывается другим Гарантом.")
+            except Exception: 
+                pass
             return
+
+    # 🛡️ ИЗОЛЯЦИЯ РОЛЕЙ: Проверяем, что Гарант не пытается модерировать сам себя
+    if user_id == buyer_id or user_id == seller_id:
+        await callback.answer("❌ Вы не можете взять эту сделку как Гарант, так как являетесь её участником (Покупателем или Продавцом)!", show_alert=True)
+        return
 
     # 2. Проверка прав доступа
     is_allowed = user_id in ADMIN_IDS
@@ -35,6 +49,7 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
         return
         
     # 3. Бронируем сделку за собой
+
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE deals SET guarantor_id = ? WHERE id = ?", (user_id, deal_id))
         async with db.execute("SELECT buyer_id, seller_id FROM deals WHERE id = ?", (deal_id,)) as cursor:
