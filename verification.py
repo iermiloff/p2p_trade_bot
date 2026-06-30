@@ -4,6 +4,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from config import ADMIN_IDS
 from database import DB_NAME
+from config import REQUIRED_CHANNEL_ID, CHANNEL_INVITE_LINK
+from aiogram.fsm.state import State, StatesGroup
 
 router = Router()
 
@@ -11,9 +13,41 @@ router = Router()
 class VerificationStates(StatesGroup):
     waiting_for_data = State()
 
+async def check_user_subscription(bot: Bot, user_id: int) -> bool:
+    """
+    Проверяет, подписан ли пользователь на обязательный канал/чат.
+    Возвращает True, если подписка активна, иначе False.
+    """
+    try:
+        member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL_ID, user_id=user_id)
+        # Статусы, которые означают, что пользователь состоит в канале/чате
+        if member.status in ["member", "administrator", "creator", "restricted"]:
+            return True
+    except Exception as e:
+        print(f"[ОШИБКА ПРОВЕРКИ ПОДПИСКИ ДЛЯ {user_id}]: {e}")
+        # Если бота удалили из канала или ID указан неверно, по соображениям безопасности возвращаем False
+    return False
+
 @router.callback_query(F.data == "start_verification")
 async def process_verification_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+        user_id = callback.from_user.id
+    
+    # ⚡ ЗАЩИТА ОТ БОТОФЕРМ: Проверяем подписку перед выдачей FSM-формы
+    is_subscribed = await check_user_subscription(bot, user_id)
+    
+    if not is_subscribed:
+        kb_retry = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="📢 Вступить в канал", url=CHANNEL_INVITE_LINK)],
+            [types.InlineKeyboardButton(text="🔄 Я вступил, проверить заново", callback_data="start_verification")]
+        ])
+        await callback.message.answer(
+            "⚠️ **Доступ ограничен!**\n\n"
+            "Для защиты платформы от спам-ботов, подача заявки на верификацию доступна только для участников нашего официального закрытого сообщества.\n\n"
+            "Пожалуйста, вступите в канал по ссылке ниже и нажмите кнопку проверки:",
+            reply_markup=kb_retry
+        )
+        return
     
     # Ссылка на Telegra.ph или другую внешнюю страницу с инструкцией
     instruction_url = "https://telegra.ph" # Замените на реальную ссылку при деплое
