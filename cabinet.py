@@ -259,51 +259,75 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
         await callback.message.edit_text("🔄 **У вас нет активных сделок на данный момент.**\nВсе обмены завершены или отменены.", reply_markup=kb_back)
         return
         
-    deal_id, status, buyer_id, seller_id, use_guarantor, guarantor_id = active_deal
+        deal_id, status, buyer_id, seller_id, use_guarantor, guarantor_id = active_deal
     kb = None
-    role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
     
-    if status == 'waiting_payment':
-        # 🛡️ ЖЕСТКИЙ БЛОК ДЛЯ ЛК: Проверяем реальное присутствие Гаранта
-        if use_guarantor == 1 and (guarantor_id is None or guarantor_id == 0):
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")],
-                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
-            ])
-        else:
+    # ⚡ ИСПРАВЛЕНО: Четко определяем текстовую роль для трех участников
+    if tg_id == guarantor_id:
+        role_text = "🛡️ Официальный Гарант сделки"
+    elif tg_id == buyer_id:
+        role_text = "Покупатель 🟩"
+    else:
+        role_text = "Продавец 🟥"
+    
+    # --- ВЕТКА А: КНОПКИ ДЛЯ ГАРАНТА КОМЬЮНИТИ ---
+    if tg_id == guarantor_id:
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
+            [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")],
+            [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+        ])
+    
+    # --- ВЕТКА Б: КНОПКИ ДЛЯ ПОКУПАТЕЛЯ И ПРОДАВЦА ---
+    else:
+        if status == 'waiting_payment':
             if tg_id == buyer_id:
-                btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
-                kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                    [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")],
-                    [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
-                ])
+                # 🛡️ АНТИ-ФРОД: Проверяем, зашел ли Гарант
+                if use_guarantor == 1 and (guarantor_id is None or guarantor_id == 0):
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")],
+                        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                    ])
+                else:
+                    btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")],
+                        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                    ])
             elif tg_id == seller_id:
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")],
                     [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
                 ])
-
-    elif status == 'waiting_delivery':
-        if tg_id == seller_id:
+        elif status == 'waiting_delivery':
+            if tg_id == seller_id:
+                if use_guarantor == 1:
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="⏳ Ожидайте, Гарант выпускает средства", callback_data="dummy_g_processing")],
+                        [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
+                        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                    ])
+                else:
+                    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                        [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
+                        [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
+                        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                    ])
+            elif tg_id == buyer_id:
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="⏳ Ожидайте выдачи монет от Продавца", callback_data="dummy_waiting_coins")],
+                    [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
+                    [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                ])
+        elif status == 'dispute':
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
-                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
+                [types.InlineKeyboardButton(text="🚨 Спор модерируется Гарантом", callback_data="dummy_dispute_mode")],
                 [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
             ])
-        elif tg_id == buyer_id:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
-                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
-            ])
-    elif status == 'dispute':
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🚨 Спор модерируется Гарантом", callback_data="dummy_dispute_mode")],
-            [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
-        ])
 
     status_labels = {
         'waiting_payment': 'Ожидание оплаты от Покупателя',
-        'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
+        'waiting_delivery': 'Ожидание подтверждения/выдачи',
         'dispute': 'Внештатная ситуация (Открыт спор)'
     }
 
