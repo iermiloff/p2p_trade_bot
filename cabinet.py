@@ -12,8 +12,9 @@ def get_main_keyboard():
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⚙️ Мои Реквизиты", callback_data="lk_requisites")],
         [
-            types.InlineKeyboardButton(text="📊 Моя Статистика", callback_data="lk_stats"),
-            types.InlineKeyboardButton(text="📜 Моя История", callback_data="lk_history")
+            types.InlineKeyboardButton(text="📊 Статистика", callback_data="lk_stats"),
+            types.InlineKeyboardButton(text="🔄 Активные сделки", callback_data="lk_active_deals"),
+            types.InlineKeyboardButton(text="📜 История", callback_data="lk_history")
         ],
         [types.InlineKeyboardButton(text="🔄 GRAM ⇄ Карты", callback_data="nav_gram_card")],
         [types.InlineKeyboardButton(text="🔄 GRAM ⇄ Piastrix", callback_data="nav_gram_piastrix")],
@@ -149,3 +150,81 @@ async def show_requisites_menu(callback: types.CallbackQuery, state: FSMContext)
     ])
     
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+# --- КНОПКА ВОЗВРАТА В АКТИВНУЮ СДЕЛКУ ИЗ ГЛАВНОГО МЕНЮ ---
+@router.callback_query(F.data == "lk_active_deals")
+async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    await state.clear()
+    tg_id = callback.from_user.id
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        query = """
+            SELECT id, status, buyer_id, seller_id, use_guarantor 
+            FROM deals 
+            WHERE (buyer_id = ? OR seller_id = ?) 
+            AND status IN ('waiting_payment', 'waiting_delivery', 'dispute')
+        """
+        async with db.execute(query, (tg_id, tg_id)) as cursor:
+            active_deal = await cursor.fetchone()
+
+    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+    ])
+
+    if not active_deal:
+        await callback.message.edit_text("🔄 **У вас нет активных сделок на данный момент.**\nВсе обмены завершены или отменены.", reply_markup=kb_back)
+        return
+        
+    deal_id, status, buyer_id, seller_id, use_guarantor = active_deal
+    kb = None
+    role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
+    
+    # ⚡ ГЕНЕРИРУЕМ ПУЛЬТ УПРАВЛЕНИЯ ПРЯМО ТУТ (Аналогично коду из main.py):
+    if status == 'waiting_payment':
+        if tg_id == buyer_id:
+            btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")],
+                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+            ])
+        elif tg_id == seller_id:
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")],
+                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+            ])
+    elif status == 'waiting_delivery':
+        if tg_id == seller_id:
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
+                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
+                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+            ])
+        elif tg_id == buyer_id:
+            kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")],
+                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+            ])
+    elif status == 'dispute':
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🚨 Спор модерируется Гарантом", callback_data="dummy_dispute_mode")],
+            [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+        ])
+
+    status_labels = {
+        'waiting_payment': 'Ожидание оплаты от Покупателя',
+        'waiting_delivery': 'Ожидание подтверждения/выдачи от Продавца',
+        'dispute': 'Внештатная ситуация (Открыт спор)'
+    }
+
+    # Бесшовно перерисовываем экран ЛК в пульт управления активной сделкой!
+    await callback.message.edit_text(
+        f"🔄 **Вы перешли в вашу активную сделку #{deal_id}!**\n\n"
+        f"👤 Ваша роль: **{role_text}**\n"
+        f"📊 Текущий статус: _{status_labels.get(status, status)}_\n"
+        f"💬 Анонимный чат по-прежнему активен.\n\n"
+        f"Используйте кнопки управления ниже для проведения обмена:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
