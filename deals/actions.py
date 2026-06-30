@@ -9,9 +9,11 @@ router = Router()
 @router.callback_query(F.data.startswith("deal_action_"))
 async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
+    
+    # ⚡ ИСПРАВЛЕНО: Четкий парсинг элементов из callback_data формата deal_action_[action]_[id]
     parts = callback.data.split("_")
-    action = parts[2]  # 'accept', 'reject', 'paid', 'completed', 'dispute'
-    deal_id = int(parts[3])
+    action = parts[2]       # 'accept', 'reject', 'paid', 'completed', 'dispute'
+    deal_id = int(parts[3])  # ID сделки всегда лежит на последней позиции!
     user_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
@@ -54,23 +56,24 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
                 ])
-                # Извлекаем данные объявления для красивого алерта Гаранту
+                
                 async with db.execute("SELECT direction, amount FROM offers WHERE id = ?", (offer_id,)) as o_cur:
                     o_res = await o_cur.fetchone()
                 o_dir = o_res[0] if o_res else "Неизвестно"
                 o_amt = o_res[1] if o_res else "Неизвестно"
 
+                # Собираем чистые числовые ID
                 all_guarantor_ids = list(ADMIN_IDS)
                 async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
                     rows = await g_cursor.fetchall()
                     for row in rows:
-                        g_uid = row[0]  # Достаем число из кортежа (12345678,) -> 12345678
+                        g_uid = row[0]
                         if g_uid not in all_guarantor_ids: 
                             all_guarantor_ids.append(g_uid)
 
-                # Умный адаптивный алерт (группа модераторов или ЛС)
-                alert_g_text = f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{o_dir}`\nСумма: `{o_amt}`"
+                alert_g_text = f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{o_dir}`\nСумма/Объем: `{o_amt}`"
                 
+                # Умный адаптивный алерт (группа модераторов или ЛС)
                 if ADMIN_CHAT_ID != 0:
                     try: await bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_g_text, reply_markup=kb_admin)
                     except: pass
@@ -85,38 +88,27 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="🟩 Я перевел средства", callback_data=f"deal_action_paid_{deal_id}")]
                 ])
-
-                try:
-                    # Так как мы пишем Покупателю от имени клика Продавца, нам нужен bot.edit_message_text
-                    # Для этого вытащим message_id Покупателя. Но чтобы не усложнять, мы просто обновим 
-                    # сообщение Продавца, а Покупателю отправим чистый пульт, удалив старый.
-                    # Давайте сделаем самый надежный и бесшовный вариант:
-                    
-                    # 1. Продавцу перерисовываем его экран принятия сделки в статус ожидания:
-                    await callback.message.edit_text(
-                        f"🤝 **Вы подтвердили прямую сделку #{deal_id}.**\n"
-                        f"💬 Анонимный чат открыт.\n\n"
-                        f"Реквизиты покупателя для сверки:\n"
-                        f"💳 Карты: `{b_card}` | 📱 Piastrix: `{b_pias}` | 💎 TON: `{b_ton}`\n\n"
-                        f"Ожидайте оплату. Покупателю отправлены ваши реквизиты."
-                    )
-                    
-                    # 2. Покупателю шлем чистую карточку оплаты (старую плашку Таймера 1 он закроет ЛК или старт)
-                    await bot.send_message(
-                        chat_id=buyer_id,
-                        text=f"✅ **Продавец подтвердил прямую сделку #{deal_id}!**\n"
-                             f"💬 Анонимный чат открыт.\n\n"
-                             f"📋 **ОФИЦИАЛЬНЫЕ РЕКВИЗИТЫ ПРОДАВЦА:**\n"
-                             f"💳 Карты: `{s_card}`\n📱 Piastrix: `{s_pias}`\n💎 TON: `{s_ton}`\n\n"
-                             f"⚠️ Переводите средства СТРОГО по указанным реквизитам. Если контрагент просит другую карту в чате — это мошенник!\n\n"
-                             f"⏳ Запущен **Таймер 2 (10 минут)**. После перевода нажмите кнопку ниже:",
-                        reply_markup=kb_buyer
-                    )
-                except Exception as e:
-                    print(f"Ошибка UX рендеринга: {e}")
+                
+                await callback.message.edit_text(
+                    f"🤝 **Вы подтвердили прямую сделку #{deal_id}.**\n"
+                    f"💬 Анонимный чат открыт.\n\n"
+                    f"Реквизиты покупателя для сверки:\n"
+                    f"💳 Карты: `{b_card}` | 📱 Piastrix: `{b_pias}` | 💎 TON: `{b_ton}`\n\n"
+                    f"Ожидайте оплату. Покупателю отправлены ваши реквизиты."
+                )
+                
+                await bot.send_message(
+                    chat_id=buyer_id,
+                    text=f"✅ **Продавец подтвердил прямую сделку #{deal_id}!**\n"
+                         f"💬 Анонимный чат открыт.\n\n"
+                         f"📋 **ОФИЦИАЛЬНЫЕ РЕКВИЗИТЫ ПРОДАВЦА:**\n"
+                         f"💳 Карты: `{s_card}`\n📱 Piastrix: `{s_pias}`\n💎 TON: `{s_ton}`\n\n"
+                         f"⚠️ Переводите средства СТРОГО по указанным реквизитам. Если контрагент просит другую карту в чате — это мошенник!\n\n"
+                         f"⏳ Запущен **Таймер 2 (10 минут)**. После перевода нажмите кнопку ниже:",
+                    reply_markup=kb_buyer
+                )
                 return
-
-
+                
         # --- Действие: Продавец отклонил сделку ---
         elif action == "reject" and user_id == seller_id and status == "waiting_seller":
             await db.execute("UPDATE deals SET status = 'cancelled' WHERE id = ?", (deal_id,))
@@ -137,7 +129,6 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
             ])
             
-            # ⚡ ИСПРАВЛЕНО: Редактируем сообщение Покупателя! Кнопка "Я перевел" стирается намертво.
             await callback.message.edit_text(
                 "🟩 **Вы подтвердили отправку средств контрагенту.**\n"
                 "Таймер оплаты успешно остановлен. Ожидаем встречного подтверждения от Продавца.\n"
@@ -150,7 +141,6 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 reply_markup=kb_seller
             )
             return
-
 
         # --- Действие: Успешное закрытие прямой сделки Продавцом ---
         elif action == "completed" and user_id == seller_id and status == "waiting_delivery":
@@ -170,7 +160,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await callback.message.edit_text(f"🎉 **Сделка #{deal_id} успешно завершена!**\nЧат закрыт. Пожалуйста, оцените Покупателя от 1 до 5 звёзд:", reply_markup=kb_rate_buyer)
             await bot.send_message(chat_id=buyer_id, text=f"🎉 **Сделка #{deal_id} успешно завершена!**\nПродавец подтвердил получение. Пожалуйста, оцените Продавца от 1 до 5 звёзд:", reply_markup=kb_rate_seller)
             return
-            
+
         # --- Действие: Открытие диспута вручную ---
         elif action == "dispute" and status == "waiting_delivery":
             await db.execute("UPDATE deals SET status = 'dispute' WHERE id = ?", (deal_id,))
@@ -180,12 +170,12 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await callback.message.answer(dispute_text)
             await bot.send_message(chat_id=buyer_id, text=dispute_text)
             
-            # ⚡ ИСПРАВЛЕНО: Распаковка кортежей для алертов о спорах
+            # Разбираем кортежи ID
             all_guarantor_ids = list(ADMIN_IDS)
             async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
                 rows = await g_cursor.fetchall()
                 for row in rows:
-                    g_uid = row[0] # Достаем число
+                    g_uid = row[0]
                     if g_uid not in all_guarantor_ids: 
                         all_guarantor_ids.append(g_uid)
 
