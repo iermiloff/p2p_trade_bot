@@ -44,7 +44,7 @@ async def register_user_safely(tg_id: int) -> str:
             except aiosqlite.IntegrityError:
                 continue
 
-@main_router.message(CommandStart())
+@main_router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(message: types.Message):
     tg_id = message.from_user.id
     nickname = await register_user_safely(tg_id)
@@ -133,7 +133,7 @@ async def cmd_start(message: types.Message):
         )
 
 # --- ПАНЕЛЬ ДИАГНОСТИКИ ---
-@main_router.message(Command("debug"))
+@main_router.message(Command("debug"), F.chat.type == "private")
 async def cmd_debug_db(message: types.Message):
     user_id = message.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
@@ -151,7 +151,7 @@ async def cmd_debug_db(message: types.Message):
     await message.answer(text)
 
 # --- ПАНЕЛЬ МОДЕРАЦИИ: БАНЫ ---
-@main_router.message(lambda msg: msg.from_user.id in ADMIN_IDS and msg.text and msg.text.startswith("/"))
+@main_router.message(lambda msg: msg.from_user.id in ADMIN_IDS and msg.chat.type == "private" and msg.text and msg.text.startswith("/"))
 async def admin_ban_commands(message: types.Message):
     text = message.text.strip()
     
