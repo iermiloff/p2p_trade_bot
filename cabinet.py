@@ -23,7 +23,7 @@ def get_main_keyboard():
         [types.InlineKeyboardButton(text="🔄 Карты ⇄ Piastrix", callback_data="nav_card_piastrix")]
     ])
 
-from config import ADMIN_IDS  # Добавьте этот импорт в верхнюю часть файла cabinet.py
+from config import ADMIN_IDS
 
 @router.callback_query(F.data == "open_main_menu")
 async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -43,40 +43,42 @@ async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
         # Обычный пользователь возвращается к торговым разделам
         await callback.message.answer("🏠 Главное меню P2P платформы:", reply_markup=get_main_keyboard())
 
-# --- РАЗДЕЛ: СТАТИСТИКА ---
+# --- РАЗДЕЛ: ПРОСМОТР ЛИЧНОЙ СТАТИСТИКИ И ТИТУЛА ---
 @router.callback_query(F.data == "lk_stats")
-async def show_statistics(callback: types.CallbackQuery):
+async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    await state.clear()
     user_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT nickname, user_status, rating, deals_count FROM users WHERE tg_id = ?", 
-            (user_id,)
-        ) as cursor:
+        # ⚡ ИСПРАВЛЕНО: Явно выбираем нужные поля, чтобы новые колонки рейтинга не ломали выборку
+        query = "SELECT nickname, user_status, rating, deals_count FROM users WHERE tg_id = ?"
+        async with db.execute(query, (user_id,)) as cursor:
             user_data = await cursor.fetchone()
             
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+    ])
+    
     if user_data:
         nickname, user_status, rating, deals_count = user_data
         status_text = STATUS_NAMES.get(user_status, "🟢 Верифицированный")
         
-        # ⚡ ГЕЙМИФИКАЦИЯ: Вычисляем текущий титул трейдера
+        # 🎮 ГЕЙМИФИКАЦИЯ: Динамически рассчитываем текущий киберпанк-титул трейдера
         from database import get_user_title
         user_title = await get_user_title(deals_count, rating)
         
         text = (
             f"📊 **Ваша статистика в системе:**\n\n"
             f"👤 Никнейм: **{nickname}**\n"
-            f"🎖 Титул: **{user_title}**\n"  # Выводим звание
-            f"💼 Роль: {status_text}\n"
-            f"⭐ Рейтинг: **{rating:.1f}**\n"
+            f"🎖 Текущий Титул: **{user_title}**\n"
+            f"💼 Проф-роль: {status_text}\n"
+            f"⭐ Средний рейтинг: **{rating:.2f}**\n"
             f"🤝 Успешных сделок: **{deals_count}**\n"
         )
-        
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
-        ])
-        await callback.message.answer(text, reply_markup=kb)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await callback.message.edit_text("❌ Ошибка: Профиль не найден в базе данных.", reply_markup=kb)
 
 # --- РАЗДЕЛ: РЕКВИЗИТЫ ---
 @router.callback_query(F.data == "lk_requisites")
