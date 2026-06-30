@@ -133,9 +133,10 @@ async def is_user_guarantor(tg_id: int) -> bool:
         async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             res = await cursor.fetchone()
             
-    if res and res == "guarantor_member":
+    if res and res[0] == "guarantor_member":
         return True
     return False
+
 
 async def get_user_title(deals_count: int, rating: float) -> str:
     """
