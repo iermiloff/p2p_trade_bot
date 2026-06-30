@@ -1,15 +1,12 @@
 import aiosqlite
 from aiogram import Router, F, types, Bot
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from config import ADMIN_IDS
-from database import DB_NAME
-from config import REQUIRED_CHANNEL_ID, CHANNEL_INVITE_LINK
 from aiogram.fsm.state import State, StatesGroup
+from config import ADMIN_IDS, REQUIRED_CHANNEL_ID, CHANNEL_INVITE_LINK
+from database import DB_NAME
 
 router = Router()
 
-# Определяем состояния для машины состояний (FSM)
 class VerificationStates(StatesGroup):
     waiting_for_data = State()
 
@@ -20,20 +17,18 @@ async def check_user_subscription(bot: Bot, user_id: int) -> bool:
     """
     try:
         member = await bot.get_chat_member(chat_id=REQUIRED_CHANNEL_ID, user_id=user_id)
-        # Статусы, которые означают, что пользователь состоит в канале/чате
         if member.status in ["member", "administrator", "creator", "restricted"]:
             return True
     except Exception as e:
-        print(f"[ОШИБКА ПРОВЕРКИ ПОДПИСКИ ДЛЯ {user_id}]: {e}")
-        # Если бота удалили из канала или ID указан неверно, по соображениям безопасности возвращаем False
+        print(f"[ОШИБКА ПР ПРОВЕРКЕ ПОДПИСКИ ДЛЯ {user_id}]: {e}")
     return False
 
 @router.callback_query(F.data == "start_verification")
-async def process_verification_start(callback: types.CallbackQuery, state: FSMContext):
+async def start_verification_cmd(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
-        user_id = callback.from_user.id
+    user_id = callback.from_user.id
     
-    # ⚡ ЗАЩИТА ОТ БОТОФЕРМ: Проверяем подписку перед выдачей FSM-формы
+    # Защита от ботоферм: Проверяем подписку перед выдачей FSM-формы
     is_subscribed = await check_user_subscription(bot, user_id)
     
     if not is_subscribed:
@@ -48,17 +43,10 @@ async def process_verification_start(callback: types.CallbackQuery, state: FSMCo
             reply_markup=kb_retry
         )
         return
-    
-    # Ссылка на Telegra.ph или другую внешнюю страницу с инструкцией
-    instruction_url = "https://telegra.ph" # Замените на реальную ссылку при деплое
-    
+
+    # Если подписан — запускаем стандартный FSM-процесс ввода данных
     await state.set_state(VerificationStates.waiting_for_data)
-    await callback.message.answer(
-        f"📖 **Инструкция по верификации:**\n"
-        f"Пожалуйста, ознакомьтесь с правилами по ссылке:\n{instruction_url}\n\n"
-        f"После ознакомления, пришлите в ответном сообщении подтверждающий скриншот "
-        f"или текст (например, ваш юзернейм на бирже/кошельке) для проверки администратором."
-    )
+    await callback.message.answer("📥 Пожалуйста, отправьте скан/фотографию вашего документа или введите текстовые данные для проверки администрацией:")
 
 @router.message(VerificationStates.waiting_for_data)
 async def process_verification_data(message: types.Message, state: FSMContext, bot: Bot):
@@ -85,7 +73,7 @@ async def process_verification_data(message: types.Message, state: FSMContext, b
     
     for admin_id in ADMIN_IDS:
         try:
-            # Формируем кликабельную ссылку на реальный профиль для админы
+            # Формируем кликабельную ссылку на реальный профиль для админов
             user_mention = f"[{message.from_user.full_name}](tg://user?id={user_id})"
             username_text = f" | @{message.from_user.username}" if message.from_user.username else ""
             
@@ -104,45 +92,36 @@ async def process_verification_data(message: types.Message, state: FSMContext, b
         except Exception:
             continue
 
-# Обработчик кнопок администратора ( Approve / Decline )
-@router.callback_query(F.data.startswith("verify_"))
-async def process_admin_decision(callback: types.CallbackQuery, bot: Bot):
-    admin_id = callback.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await callback.answer("⚠ Вы не являетесь администратором!", show_alert=True)
-        return
-        
-    # Разбираем callback_data (например: verify_approve_12345678)
-    data_parts = callback.data.split("_")
-    action = data_parts[1] # approve или decline
-    target_user_id = int(data_parts[2])
+@router.callback_query(F.data.startswith("verify_approve_"))
+async def approve_verification(callback: types.CallbackQuery, bot: Bot):
+    await callback.answer()
+    target_id = int(callback.data.replace("verify_approve_", ""))
     
     async with aiosqlite.connect(DB_NAME) as db:
-        if action == "approve":
-            # Меняем статус верификации на 1 (Истина)
-            await db.execute("UPDATE users SET is_verified = 1 WHERE tg_id = ?", (target_user_id,))
-            await db.commit()
-            
-            await callback.message.edit_text(f"✅ Пользователь `{target_user_id}` успешно верифицирован.")
-            try:
-                # Уведомляем пользователя об успешной верификации
-                await bot.send_message(
-                    chat_id=target_user_id,
-                    text="🎉 **Поздравляем!** Ваша верификация успешно одобрена администратором.\n"
-                         "Используйте команду `/start` или нажмите кнопку, чтобы открыть Главное меню."
-                )
-            except Exception:
-                pass
-                
-        elif action == "decline":
-            await callback.message.edit_text(f"❌ Заявка пользователя `{target_user_id}` была отклонена.")
-            try:
-                await bot.send_message(
-                    chat_id=target_user_id,
-                    text="❌ К сожалению, ваша заявка на верификацию была отклонена администратором.\n"
-                         "Вы можете попробовать отправить данные повторно, нажав кнопку верификации."
-                )
-            except Exception:
-                pass
-                
+        await db.execute("UPDATE users SET is_verified = 1 WHERE tg_id = ?", (target_id,))
+        await db.commit()
+        
+    await callback.message.edit_text(f"✅ Заявка пользователя `{target_id}` успешно одобрена.")
+    try:
+        import cabinet
+        await bot.send_message(
+            chat_id=target_id,
+            text="🎉 **Поздравляем! Ваша верификация успешно одобрена администрацией.**\nВам открыт полный доступ к P2P-платформе:",
+            reply_markup=cabinet.get_main_keyboard()
+        )
+    except Exception:
+        pass
+
+@router.callback_query(F.data.startswith("verify_decline_"))
+async def decline_verification(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
+    target_id = int(callback.data.replace("verify_decline_", ""))
+    
+    await callback.message.edit_text(f"❌ Заявка пользователя `{target_id}` была отклонена.")
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text="❌ **Ваша заявка на верификацию была отклонена администрацией.**\nПожалуйста, проверьте корректность отправленных данных и попробуйте снова."
+        )
+    except Exception:
+        pass
