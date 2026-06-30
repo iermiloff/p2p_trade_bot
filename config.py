@@ -19,3 +19,5 @@ if not ADMIN_IDS:
 
 REQUIRED_CHANNEL_ID = int(os.getenv("REQUIRED_CHANNEL_ID", "0"))
 CHANNEL_INVITE_LINK = os.getenv("CHANNEL_INVITE_LINK", "https://t.me+")
+
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
