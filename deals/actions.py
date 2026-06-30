@@ -61,15 +61,20 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                     o_res = await o_cur.fetchone()
                 o_dir = o_res[0] if o_res else "Неизвестно"
                 o_amt = o_res[1] if o_res else "Неизвестно"
-
+                
                 # Собираем чистые числовые ID
                 all_guarantor_ids = list(ADMIN_IDS)
-                async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
-                    rows = await g_cursor.fetchall()
-                    for row in rows:
-                        g_uid = row[0]
-                        if g_uid not in all_guarantor_ids: 
-                            all_guarantor_ids.append(g_uid)
+                try:
+                    async with aiosqlite.connect(DB_NAME) as db:
+                        async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
+                            rows = await g_cursor.fetchall()
+                            for row in rows:
+                                g_uid = row[0]  # ⚡ ЧЕТКО ДОСТАЕМ ЧИСЛО ИЗ КОРТЕЖА SQLite!
+                                if g_uid not in all_guarantor_ids: 
+                                    all_guarantor_ids.append(g_uid)
+                except Exception as db_err:
+                    print(f"[ОШИБКА БД ПРИ СБОРЕ ГАРАНТОВ]: {db_err}")
+
 
                 alert_g_text = f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{o_dir}`\nСумма/Объем: `{o_amt}`"
                 
@@ -170,14 +175,19 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await callback.message.answer(dispute_text)
             await bot.send_message(chat_id=buyer_id, text=dispute_text)
             
-            # Разбираем кортежи ID
+            # Разбираем кортежи ID при диспуте
             all_guarantor_ids = list(ADMIN_IDS)
-            async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
-                rows = await g_cursor.fetchall()
-                for row in rows:
-                    g_uid = row[0]
-                    if g_uid not in all_guarantor_ids: 
-                        all_guarantor_ids.append(g_uid)
+            try:
+                async with aiosqlite.connect(DB_NAME) as db:
+                    async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
+                        rows = await g_cursor.fetchall()
+                        for row in rows:
+                            g_uid = row[0]  # ⚡ ЧЕТКО ДОСТАЕМ ЧИСЛО ИЗ КОРТЕЖА!
+                            if g_uid not in all_guarantor_ids: 
+                                all_guarantor_ids.append(g_uid)
+            except Exception as db_err:
+                print(f"[ОШИБКА БД ПРИ ДИСПОТЕ]: {db_err}")
+
 
             alert_d_text = f"⚠️ **ВНИМАНИЕ! Открыт спор (Диспут) по сделке #{deal_id}!** Требуется вмешательство."
             
