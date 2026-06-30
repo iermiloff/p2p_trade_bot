@@ -26,7 +26,7 @@ def get_admin_keyboard():
         [types.InlineKeyboardButton(text="🚫 Список забаненных", callback_data="admin_view_banned")]
     ])
 
-@router.message(Command("admin"))
+@router.message(Command("admin"), F.chat.type == "private")
 async def cmd_admin_panel(message: types.Message, state: FSMContext):
     """Вход в админку по команде /admin с авто-очисткой зависших стейтов"""
     await state.clear()
