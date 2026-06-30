@@ -11,7 +11,8 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
     
     user_id = callback.from_user.id
-    deal_id = int(callback.data.split("_")[-1]) # Четкий парсинг ID сделки
+    # Гарантированно берем ID сделки с конца строки
+    deal_id = int(callback.data.split("_")[-1]) 
     
     # 1. Защита от конфликта гарантов
     async with aiosqlite.connect(DB_NAME) as db:
@@ -49,7 +50,7 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
     s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не указано")
         
-    # Создаем пульт управления для Гаранта
+    # ⚡ ВАЖНО: Формируем четкие callback-данные для пульта Гаранта
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
         [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")]
@@ -59,18 +60,14 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
         f"✅ Вы вошли в сделку #{deal_id} как официальный Гарант.\n"
         f"💬 Напишите свои реквизиты в анонимный чат для депонирования.\n\n"
         f"📋 **ДАННЫЕ ДЛЯ ПРОВЕРКИ ЧЕКОВ:**\n\n"
-        f"⚠️ **Внимание:** Удержите **5% комиссии** платформы при выплате средств!\n\n"
+        f"⚠️ **Внимание:** Удержите **10% комиссии** платформы при выплате средств!\n\n"
         f"👤 **Покупатель (ID: `{buyer_id}`):**\n• Карты: `{b_card}`\n• Piastrix: `{b_pias}`\n• TON: `{b_ton}`\n\n"
         f"👤 **Продавец (ID: `{seller_id}`):**\n• Карты: `{s_card}`\n• Piastrix: `{s_pias}`\n• TON: `{s_ton}`\n\n",
         reply_markup=kb_admin_control,
         parse_mode="Markdown"
     )
     
-    kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🟩 Я перевел средства Гаранту", callback_data=f"deal_action_paid_{deal_id}")]
-    ])
-    
-    await bot.send_message(chat_id=buyer_id, text="⚡ **Гарант подключился к сделке!** Ожидайте официальные реквизиты в анонимном чате.", reply_markup=kb_buyer)
+    await bot.send_message(chat_id=buyer_id, text="⚡ **Гарант подключился к сделке!** Ожидайте официальные реквизиты в анонимном чате.")
     await bot.send_message(chat_id=seller_id, text="⚡ **Гарант подключился к сделке!** Ожидайте депонирования средств и команды от Гаранта.")
 
 
@@ -78,9 +75,11 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("deal_action_g"))
 async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
+    
+    # ⚡ БЕЗОПАСНЫЙ ПАРСИНГ: Извлекаем экшен и ID сделки с гарантированной точностью
     parts = callback.data.split("_")
-    action = parts[2] # 'gcomplete' или 'gcancel'
-    deal_id = int(parts[3])
+    action = parts[-2]  # Получаем 'gcomplete' или 'gcancel'
+    deal_id = int(parts[-1])  # Получаем числовой ID сделки с самого конца строки
     user_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
@@ -88,41 +87,61 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
             deal = await cursor.fetchone()
             
     if not deal:
+        await callback.message.edit_text("❌ Ошибка: Сделка не найдена в базе данных.")
         return
+        
     buyer_id, seller_id, status, guarantor_id, offer_id = deal
     
+    # Жесткая проверка прав именно этого назначенного Гаранта
     if not guarantor_id or guarantor_id != user_id:
         await callback.answer("⚠️ Вы не являетесь назначенным Гарантом этой сделки!", show_alert=True)
         return
         
-    if status == "completed":
+    if status == "completed" or status == "cancelled":
+        await callback.answer("⚠️ Эта сделка уже была закрыта ранее.", show_alert=True)
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
-        # 🎉 А: Ручной выпуск средств
+        # 🎉 А: Ручной выпуск средств Гарантом
         if action == "gcomplete":
             await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (buyer_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
             await db.commit()
             
-            kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)]])
-            kb_rate_buyer = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{buyer_id}_{i}") for i in range(1, 6)]])
+            kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)],
+                [types.InlineKeyboardButton(text="🏠 В главное меню", callback_data="open_main_menu")]
+            ])
+            kb_rate_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{buyer_id}_{i}") for i in range(1, 6)],
+                [types.InlineKeyboardButton(text="🏠 В главное меню", callback_data="open_main_menu")]
+            ])
 
-            await callback.message.edit_text(f"✅ Вы успешно закрыли сделку #{deal_id} в качестве Гаранта.")
+            await callback.message.edit_text(f"✅ Вы успешно закрыли сделку #{deal_id} в качестве Гаранта. Сделка зафиксирована в БД на диске.")
             
-            await bot.send_message(chat_id=buyer_id, text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\nПожалуйста, оцените работу Продавца от 1 до 5 звёзд:", reply_markup=kb_rate_seller)
-            await bot.send_message(chat_id=seller_id, text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\nПожалуйста, оцените работу Покупателя от 1 до 5 звёзд:", reply_markup=kb_rate_buyer)
+            await bot.send_message(
+                chat_id=buyer_id, 
+                text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\n\nПожалуйста, оцените работу Продавца от 1 до 5 звёзд или вернитесь в меню:", 
+                reply_markup=kb_rate_seller
+            )
+            await bot.send_message(
+                chat_id=seller_id, 
+                text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\n\nОжидайте ручной перевод фиата от Гаранта.\nПожалуйста, оцените работу Покупателя от 1 до 5 звёзд или вернитесь в меню:", 
+                reply_markup=kb_rate_buyer
+            )
             return
 
-        # ❌ Б: Ручная отмена сделки
+        # ❌ Б: Ручная отмена сделки Гарантом
         elif action == "gcancel":
             await db.execute("UPDATE deals SET status = 'cancelled' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE offers SET status = 'active' WHERE id = ?", (offer_id,))
             await db.commit()
             
             cancel_text = f"❌ **Сделка #{deal_id} ОТМЕНЕНА ГАРАНТОМ!**\nЗаявка вернулась в стакан, средства подлежат возврату."
-            await callback.message.edit_text(f"❌ Вы отменили сделку #{deal_id}.")
+            await callback.message.edit_text(f"❌ Вы успешно отменили сделку #{deal_id}. Ордер возвращен в стакан.")
+            
             await bot.send_message(chat_id=buyer_id, text=cancel_text)
             await bot.send_message(chat_id=seller_id, text=cancel_text)
             return
+
