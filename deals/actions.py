@@ -79,16 +79,20 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
             # ВЕТКА Б: ОБЫЧНАЯ ПРЯМАЯ СДЕЛКА
             else:
-                kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[[[types.InlineKeyboardButton(text="🟩 Я перевел средства", callback_data=f"deal_action_paid_{deal_id}")]]])
+                kb_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="🟩 Я перевел средства", callback_data=f"deal_action_paid_{deal_id}")]
+                ])
+                
                 await bot.send_message(
                     chat_id=buyer_id,
-                    text=f"✅ Продавец подтвердил прямую сделку #{deal_id}!\n💬 Анонимный чат открыт.\n\n"
+                    text=f"✅ Продавец подтвердил прямую сделку #{deal_id}!\n💬 **Анонимный чат открыт.**\n\n"
                          f"📋 **ОФИЦИАЛЬНЫЕ РЕКВИЗИТЫ ПРОДАВЦА:**\n"
                          f"💳 Карты: `{s_card}`\n📱 Piastrix: `{s_pias}`\n💎 TON: `{s_ton}`\n\n"
                          f"⚠️ Переводите средства СТРОГО по указанным реквизитам. Если контрагент просит другую карту в чате — это мошенник!\n\n"
                          f"⏳ Запущен **Таймер 2 (10 минут)**. После перевода нажмите кнопку ниже:",
                     reply_markup=kb_buyer
                 )
+
                 await bot.send_message(chat_id=seller_id, text=f"🤝 Вы подтвердили прямую сделку #{deal_id}.\n💬 Анонимный чат открыт.\n\nРеквизиты покупателя:\n💳 Карты: `{b_card}` | 📱 Piastrix: `{b_pias}` | 💎 TON: `{b_ton}`\n\nОжидайте оплату.")
                 return
 
