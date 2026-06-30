@@ -32,4 +32,14 @@ async def process_user_rating(callback: types.CallbackQuery):
         )
         await db.commit()
         
-    await callback.message.edit_text(f"✅ Спасибо! Вы успешно выставили оценку контрагенту: **⭐️ {stars}**.")
+    # ⚡ ГЕЙМИФИКАЦИЯ И УДОБСТВО: Создаем кнопку быстрого бесшовного возврата в Личный Кабинет
+    kb_to_menu = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🏠 В главное меню", callback_data="open_main_menu")]
+    ])
+        
+    # Перерисовываем клавиатуру звезд на аккуратную кнопку возврата
+    await callback.message.edit_text(
+        f"✅ Спасибо! Вы успешно выставили оценку контрагенту: **⭐️ {stars}**.\n"
+        f"Сделка полностью закрыта и архивирована. Вы можете вернуться к торговле:", 
+        reply_markup=kb_to_menu
+    )
