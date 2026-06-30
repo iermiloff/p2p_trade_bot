@@ -18,11 +18,10 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
         async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as cursor:
             res_g = await cursor.fetchone()
             
-    if res_g and res_g[0] is not None:
-        if res_g[0] != user_id:
+    if res_g and res_g is not None:
+        if res_g != user_id:
             await callback.answer("❌ Эта сделка уже взята другим Гарантом!", show_alert=True)
-            try:
-                await callback.message.edit_text(f"🔒 Сделка #{deal_id} уже обрабатывается другим Гарантом.")
+            try: await callback.message.edit_text(f"🔒 Сделка #{deal_id} уже обрабатывается другим Гарантом.")
             except Exception: pass
             return
 
@@ -49,9 +48,10 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
     s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не указано")
         
+    # ⚡ ИСПРАВЛЕНО: Даем кнопкам Гаранта уникальный префикс, исключающий перехваты другими роутерами!
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
-        [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")]
+        [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"guarantor_complete_{deal_id}")],
+        [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"guarantor_cancel_{deal_id}")]
     ])
         
     await callback.message.edit_text(
@@ -80,16 +80,16 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
 
 
 # --- ОБРАБОТКА ДЕЙСТВИЙ ГАРАНТА (РУЧНОЙ ВЫПУСК / ОТМЕНА) ---
-@router.callback_query(F.data.startswith("deal_action_g"))
+# ⚡ ИСПРАВЛЕНО: Роутер ловит СТРОГО уникальный префикс гаранта, перехват исключен!
+@router.callback_query(F.data.startswith("guarantor_"))
 async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
     
-    # ⚡ ПУЛЕНЕПРОБИВАЕМЫЙ ПАРСИНГ: ID сделки — это ВСЕГДА самое последнее число в строке
     parts = callback.data.split("_")
-    deal_id = int(parts[-1])
+    action = parts[1]  # 'complete' или 'cancel'
+    deal_id = int(parts[2])
     user_id = callback.from_user.id
     
-    # Заново выгружаем все поля сделки из БД строго по числу deal_id
     async with aiosqlite.connect(DB_NAME) as db:
         query = "SELECT buyer_id, seller_id, status, guarantor_id, offer_id FROM deals WHERE id = ?"
         async with db.execute(query, (deal_id,)) as cursor:
@@ -101,7 +101,6 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
         
     buyer_id, seller_id, status, guarantor_id, offer_id = deal
     
-    # Жесткая проверка прав именно этого назначенного Гаранта
     if not guarantor_id or guarantor_id != user_id:
         await callback.answer("⚠️ Вы не являетесь назначенным Гарантом этой сделки!", show_alert=True)
         return
@@ -111,12 +110,12 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
-        # 🎉 А: Ручной выпуск средств Гарантом (Ищем подстроку 'gcomplete' в callback.data)
-        if "gcomplete" in callback.data:
+        # 🎉 А: Ручной выпуск средств Гарантом
+        if action == "complete":
             await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (buyer_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
-            await db.commit() # Жестко фиксируем на диск!
+            await db.commit()
             
             kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)],
@@ -141,11 +140,11 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
             )
             return
 
-        # ❌ Б: Ручная отмена сделки Гарантом (Ищем подстроку 'gcancel' в callback.data)
-        elif "gcancel" in callback.data:
+        # ❌ Б: Ручная отмена сделки Гарантом
+        elif action == "cancel":
             await db.execute("UPDATE deals SET status = 'cancelled' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE offers SET status = 'active' WHERE id = ?", (offer_id,))
-            await db.commit() # Жестко фиксируем на диск!
+            await db.commit()
             
             cancel_text = f"❌ **Сделка #{deal_id} ОТМЕНЕНА ГАРАНТОМ!**\nЗаявка вернулась в стакан, средства подлежат возврату."
             await callback.message.edit_text(f"❌ Вы успешно отменили сделку #{deal_id}. Ордер возвращен в стакан.")
@@ -153,3 +152,4 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
             await bot.send_message(chat_id=buyer_id, text=cancel_text)
             await bot.send_message(chat_id=seller_id, text=cancel_text)
             return
+
