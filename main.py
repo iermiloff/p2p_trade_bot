@@ -23,26 +23,49 @@ dp = Dispatcher(storage=MemoryStorage())
 # Главный роутер для базовых команд (старт, дебаг, баны)
 main_router = Router()
 
-ADJECTIVES = ["Epic", "Brave", "Silent", "Golden", "Swift", "Mad", "Crazy", "Happy"]
-NOUNS = ["Whale", "Punk", "Trader", "Shark", "Phoenix", "Falcon", "Tiger", "Bear"]
+# 🎖️ КИБЕРПАНК-СЛОВАРЬ ДЛЯ БЕСКОНЕЧНЫХ ЦВЕТНЫХ АНОНИМНЫХ НИКНЕЙМОВ P2P
+COLORS = [
+    "Neon", "Cyber", "Crimson", "Azure", "Emerald", "Golden", "Shadow", "Frost",
+    "Toxic", "Acid", "Midnight", "Solar", "Cosmic", "Ghost", "Iron", "Quantum",
+    "Cobalt", "Amber", "Ruby", "Sapphire", "Obsidian", "Onyx", "Plasma", "Vortex"
+]
+
+ADJECTIVES = [
+    "Epic", "Brave", "Silent", "Swift", "Mad", "Crazy", "Happy", "Wild",
+    "Noble", "Savage", "Alpha", "Omega", "Secret", "Fierce", "Loyal", "Vicious",
+    "Stealth", "Rogue", "Ancient", "Cunning", "Rebel", "Hybrid", "Matrix", "Vector"
+]
+
+NOUNS = [
+    "Whale", "Punk", "Trader", "Shark", "Phoenix", "Falcon", "Tiger", "Bear",
+    "Wolf", "Eagle", "Lion", "Python", "Viper", "Knight", "Ranger", "Titan",
+    "Hunter", "Wizard", "Ninja", "Hustler", "Broker", "Baron", "Agent", "Runner"
+]
 
 async def register_user_safely(tg_id: int) -> str:
-    """Атомарная регистрация пользователя с гарантией уникальности никнейма"""
+    """Атомарная регистрация пользователя с генерацией бесконечного цветного никнейма"""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT nickname FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             user = await cursor.fetchone()
             if user:
-                return user[0]
+                return user
 
         while True:
-            nickname = f"{random.choice(ADJECTIVES)} {random.choice(NOUNS)}"
+            # Сборка формата: "Neon Green Brave Punk #4815"
+            color = random.choice(COLORS)
+            adj = random.choice(ADJECTIVES)
+            noun = random.choice(NOUNS)
+            num = random.randint(1000, 9999)
+            nickname = f"{color} {adj} {noun} #{num}"
+            
             try:
                 await db.execute("INSERT INTO users (tg_id, nickname) VALUES (?, ?)", (tg_id, nickname))
                 await db.execute("INSERT INTO requisites (tg_id) VALUES (?)", (tg_id,))
                 await db.commit()
                 return nickname
             except aiosqlite.IntegrityError:
-                continue
+                continue # Защита от дублей: если хэш совпал, генерируем заново
+
 
 @main_router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(message: types.Message):
