@@ -117,24 +117,72 @@ async def admin_show_stored_document(callback: types.CallbackQuery, bot: Bot):
         await bot.send_photo(chat_id=callback.from_user.id, photo=res[0], caption=f"📄 Документ верификации пользователя `{target_id}` поднят из БД.")
     else:
         await callback.message.answer("⚠️ Документ не найден в базе данных.")
-# --- 3. СПИСОК ВСЕХ ПОЛЬЗОВАТЕЛЕЙ С КНОПКАМИ МГНОВЕННОГО ПЕРЕХОДА ---
-@router.callback_query(F.data == "admin_view_users")
+
+# --- 3. ПОСТРАНИЧНЫЙ СПИСОК ПОЛЬЗОВАТЕЛЕЙ (ПАГИНАЦИЯ) ---
+@router.callback_query(F.data.startswith("admin_view_users"))
 async def admin_view_users_list(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-    await state.clear()  # Сбрасываем стейты
+    await state.clear()
+    
+    # Извлекаем номер страницы из callback_data (формат: admin_view_users_page_[номер])
+    parts = callback.data.split("_")
+    page = int(parts[-1]) if len(parts) > 3 and parts[-1].isdigit() else 1
+    
+    limit = 5  # Выводим строго по 5 пользователей на сообщение, чтобы не спамить
+    offset = (page - 1) * limit
+    
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT tg_id, nickname, user_status, rating, deals_count, is_verified FROM users LIMIT 10") as cursor:
+        # Считаем общее количество пользователей для вычисления страниц
+        async with db.execute("SELECT COUNT(*) FROM users") as c:
+            total_users = (await c.fetchone())[0]
+            
+        # Вытягиваем порцию пользователей строго для текущей страницы
+        query = "SELECT tg_id, nickname, user_status, rating, deals_count, is_verified FROM users LIMIT ? OFFSET ?"
+        async with db.execute(query, (limit, offset)) as cursor:
             users = await cursor.fetchall()
             
-    await callback.message.edit_text(
-        "👥 **Список пользователей системы:**\n(Нажмите кнопку под карточкой для быстрого управления)", 
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="back_to_admin")]])
-    )
+    # Вычисляем максимальное количество страниц
+    import math
+    max_pages = math.ceil(total_users / limit) if total_users > 0 else 1
+    
+    text = f"👥 **Список пользователей системы (Страница {page}/{max_pages}):**\n\n"
+    
+    # Собираем инлайн-кнопки для каждого пользователя на этой странице
+    inline_keyboard = []
     
     for tg_id, nick, status, rating, deals, is_verified in users:
-        kyc_badge = "🟢 Доступ разрешен" if is_verified == 1 else "⏳ Ожидает верификацию"
-        status_name = STATUS_NAMES.get(status, "❌ Доступ закрыт") if is_verified == 1 else "❌ Доступ закрыт"
-        real_profile_link = f"[{nick}](tg://user?id={tg_id})"
+        kyc_badge = "🟢 Доступ" if is_verified == 1 else "⏳ Ожидает"
+        status_name = STATUS_NAMES.get(status, "❌ Закрыт") if is_verified == 1 else "❌ Закрыт"
+        
+        # Отрезаем хэштег из ника для красоты на кнопке, если нужно
+        text += f"• **{nick}** | ID: `{tg_id}`\n  └ KYC: {kyc_badge} | {status_name} | ⭐ {rating:.1f} | 🤝 {deals}\n\n"
+        
+        # Добавляем персональную кнопку управления в один ряд с ником
+        inline_keyboard.append([
+            types.InlineKeyboardButton(text=f"⚙️ Управлять {nick.split(' #')[0]}", callback_data=f"usrmng_panel_{tg_id}")
+        ])
+        
+    # Генерируем стрелочки навигации под списком
+    navigation_row = []
+    if page > 1:
+        navigation_row.append(types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_view_users_page_{page - 1}"))
+    
+    navigation_row.append(types.InlineKeyboardButton(text=f"📄 {page} / {max_pages}", callback_data="dummy_page"))
+    
+    if page < max_pages:
+        navigation_row.append(types.InlineKeyboardButton(text="Вперед ➡️", callback_data=f"admin_view_users_page_{page + 1}"))
+        
+    inline_keyboard.append(navigation_row)
+    inline_keyboard.append([types.InlineKeyboardButton(text="⬅️ Главное меню админки", callback_data="back_to_admin")])
+    
+    kb_pagination = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    
+    # ⚡ ВАЖНО: Мы РЕДАКТИРУЕМ текущее сообщение, а не шлем новые! Нет флуда.
+    try:
+        await callback.message.edit_text(text, reply_markup=kb_pagination, parse_mode="Markdown")
+    except Exception:
+        # На случай, если админ нажал ту же страницу и текст не поменялся
+        pass
         
         # ГЕНЕРИРУЕМ КНОПКУ ПРЯМОГО ВХОДА В КАРТОЧКУ УПРАВЛЕНИЯ ЭТИМ ЮЗЕРОМ
         kb_user_control = types.InlineKeyboardMarkup(inline_keyboard=[
