@@ -170,7 +170,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await callback.message.edit_text(f"🎉 **Сделка #{deal_id} успешно завершена!**\nЧат закрыт. Пожалуйста, оцените Покупателя от 1 до 5 звёзд:", reply_markup=kb_rate_buyer)
             await bot.send_message(chat_id=buyer_id, text=f"🎉 **Сделка #{deal_id} успешно завершена!**\nПродавец подтвердил получение. Пожалуйста, оцените Продавца от 1 до 5 звёзд:", reply_markup=kb_rate_seller)
             return
-
+            
         # --- Действие: Открытие диспута вручную ---
         elif action == "dispute" and status == "waiting_delivery":
             await db.execute("UPDATE deals SET status = 'dispute' WHERE id = ?", (deal_id,))
@@ -180,16 +180,23 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await callback.message.answer(dispute_text)
             await bot.send_message(chat_id=buyer_id, text=dispute_text)
             
+            # ⚡ ИСПРАВЛЕНО: Распаковка кортежей для алертов о спорах
             all_guarantor_ids = list(ADMIN_IDS)
             async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
                 rows = await g_cursor.fetchall()
                 for row in rows:
-                    if row[0] not in all_guarantor_ids: 
-                        all_guarantor_ids.append(row[0])
+                    g_uid = row[0] # Достаем число
+                    if g_uid not in all_guarantor_ids: 
+                        all_guarantor_ids.append(g_uid)
 
-            for g_id in all_guarantor_ids:
-                try:
-                    await bot.send_message(chat_id=g_id, text=f"⚠️ **ВНИМАНИЕ! Открыт спор (Диспут) по сделке #{deal_id}!** Требуется вмешательство.")
-                except: 
-                    continue
+            alert_d_text = f"⚠️ **ВНИМАНИЕ! Открыт спор (Диспут) по сделке #{deal_id}!** Требуется вмешательство."
+            
+            if ADMIN_CHAT_ID != 0:
+                try: await bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_d_text)
+                except: pass
+            else:
+                for g_id in all_guarantor_ids:
+                    try: await bot.send_message(chat_id=g_id, text=alert_d_text)
+                    except: continue
             return
+
