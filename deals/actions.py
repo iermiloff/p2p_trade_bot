@@ -133,13 +133,21 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 [types.InlineKeyboardButton(text="🎉 Обмен завершен (Средства у меня)", callback_data=f"deal_action_completed_{deal_id}")],
                 [types.InlineKeyboardButton(text="🚨 Вызвать Гаранта (Спор)", callback_data=f"deal_action_dispute_{deal_id}")]
             ])
-            await callback.message.answer("🟩 Вы подтвердили отправку средств. Ожидаем встречного подтверждения от продавца.")
+            
+            # ⚡ ИСПРАВЛЕНО: Редактируем сообщение Покупателя! Кнопка "Я перевел" стирается намертво.
+            await callback.message.edit_text(
+                "🟩 **Вы подтвердили отправку средств контрагенту.**\n"
+                "Таймер оплаты успешно остановлен. Ожидаем встречного подтверждения от Продавца.\n"
+                "💬 Анонимный чат по-прежнему активен для отправки чеков."
+            )
+            
             await bot.send_message(
                 chat_id=seller_id,
                 text=f"💰 Покупатель отметил сделку #{deal_id} как **ОПЛАЧЕННУЮ**.\nПроверьте ваш счет.\n⏳ Запущен **Таймер 3 (10 минут)**. Нажмите кнопку для завершения:",
                 reply_markup=kb_seller
             )
             return
+
 
         # --- Действие: Успешное закрытие прямой сделки Продавцом ---
         elif action == "completed" and user_id == seller_id and status == "waiting_delivery":
