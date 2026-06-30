@@ -77,24 +77,23 @@ async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     else:
         await callback.message.edit_text("❌ Ошибка: Профиль не найден в базе данных.", reply_markup=kb)
-
-
 # --- РАЗДЕЛ: ЛИЧНАЯ ИСТОРИЯ СДЕЛОК (БЕЗ ФЛУДА) ---
 @router.callback_query(F.data == "lk_history")
 async def show_user_history(callback: types.CallbackQuery):
     await callback.answer()
-    user_id = callback.from_user.id
+    user_id = callback.from_user.id  # Переменная называется user_id!
     
     async with aiosqlite.connect(DB_NAME) as db:
         query = """
-            SELECT id, status, buyer_id, seller_id, use_guarantor, guarantor_id 
-            FROM deals 
-            WHERE (buyer_id = ? OR seller_id = ?) 
-            AND status IN ('waiting_payment', 'waiting_delivery', 'dispute')
+            SELECT deals.id, deals.buyer_id, deals.status, offers.direction, offers.amount 
+            FROM deals
+            JOIN offers ON deals.offer_id = offers.id
+            WHERE deals.buyer_id = ? OR deals.seller_id = ?
+            ORDER BY deals.id DESC LIMIT 5
         """
-        async with db.execute(query, (tg_id, tg_id)) as cursor:
-            active_deal = await cursor.fetchone()
-
+        
+        async with db.execute(query, (user_id, user_id)) as cursor:
+            my_history = await cursor.fetchall()
 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
