@@ -1,47 +1,43 @@
 import aiosqlite
-from config import ADMIN_IDS
 from aiogram import Router, F, types
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.filters import StateFilter  # ИМПОРТ СТРОГОГО ФИЛЬТРА AIOGRAM 3
-from database import DB_NAME
+from config import ADMIN_IDS
+from database import DB_NAME, get_user_title
 from constants import STATUS_NAMES
 
 router = Router()
 
-class RequisitesStates(StatesGroup):
-    waiting_for_card = State()
-    waiting_for_piastrix = State()
-    waiting_for_ton = State()
-
 def get_main_keyboard():
+    """Генерация кнопок Главного меню P2P-платформы"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="⚙️ Мои Реквизиты", callback_data="lk_requisites")],
-        [types.InlineKeyboardButton(text="📊 Моя Статистика", callback_data="lk_stats")],
+        [
+            types.InlineKeyboardButton(text="📊 Моя Статистика", callback_data="lk_stats"),
+            types.InlineKeyboardButton(text="📜 Моя История", callback_data="lk_history")
+        ],
         [types.InlineKeyboardButton(text="🔄 GRAM ⇄ Карты", callback_data="nav_gram_card")],
         [types.InlineKeyboardButton(text="🔄 GRAM ⇄ Piastrix", callback_data="nav_gram_piastrix")],
         [types.InlineKeyboardButton(text="🔄 Карты ⇄ Piastrix", callback_data="nav_card_piastrix")]
     ])
 
-from config import ADMIN_IDS
-
+# --- ВОЗВРАТ В ГЛАВНОЕ МЕНЮ (СТРОГО РЕДАКТИРОВАНИЕМ) ---
 @router.callback_query(F.data == "open_main_menu")
 async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     user_id = callback.from_user.id
     
-    # ⚡ Если кнопку "Назад в меню" нажал админ, принудительно возвращаем его в админку
+    # Защита: Если кнопку нажал админ, возвращаем его в админку
     if user_id in ADMIN_IDS:
         import admin
-        await callback.message.answer(
-            "🛠 **Панель управления Администратора P2P**\n\n"
-            "Выберите необходимый раздел для модерации платформы:",
+        await callback.message.edit_text(
+            "🛠 **Панель управления Администратора P2P**\n\nВыберите необходимый раздел для модерации платформы:",
             reply_markup=admin.get_admin_keyboard()
         )
     else:
-        # Обычный пользователь возвращается к торговым разделам
-        await callback.message.answer("🏠 Главное меню P2P платформы:", reply_markup=get_main_keyboard())
+        # Обычный пользователь возвращается к торговым разделам без нового сообщения
+        await callback.message.edit_text("🏠 **Главное меню P2P платформы:**", reply_markup=get_main_keyboard())
+
 
 # --- РАЗДЕЛ: ПРОСМОТР ЛИЧНОЙ СТАТИСТИКИ И ТИТУЛА ---
 @router.callback_query(F.data == "lk_stats")
@@ -51,7 +47,6 @@ async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
-        # ⚡ ИСПРАВЛЕНО: Явно выбираем нужные поля, чтобы новые колонки рейтинга не ломали выборку
         query = "SELECT nickname, user_status, rating, deals_count FROM users WHERE tg_id = ?"
         async with db.execute(query, (user_id,)) as cursor:
             user_data = await cursor.fetchone()
@@ -63,9 +58,6 @@ async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
     if user_data:
         nickname, user_status, rating, deals_count = user_data
         status_text = STATUS_NAMES.get(user_status, "🟢 Верифицированный")
-        
-        # 🎮 ГЕЙМИФИКАЦИЯ: Динамически рассчитываем текущий киберпанк-титул трейдера
-        from database import get_user_title
         user_title = await get_user_title(deals_count, rating)
         
         text = (
@@ -80,105 +72,80 @@ async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
     else:
         await callback.message.edit_text("❌ Ошибка: Профиль не найден в базе данных.", reply_markup=kb)
 
-# --- РАЗДЕЛ: РЕКВИЗИТЫ ---
-@router.callback_query(F.data == "lk_requisites")
-async def show_requisites_menu(callback: types.CallbackQuery):
+
+# --- РАЗДЕЛ: ЛИЧНАЯ ИСТОРИЯ СДЕЛОК (БЕЗ ФЛУДА) ---
+@router.callback_query(F.data == "lk_history")
+async def show_user_history(callback: types.CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
-    await render_requisites(callback.message, user_id)
-
-async def render_requisites(message: types.Message, user_id: int):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", 
-            (user_id,)
-        ) as cursor:
-            req_data = await cursor.fetchone()
-            
-    card, piastrix, ton = req_data if req_data else ("", "", "")
     
-    card_display = card if card and card.strip() else "❌ Не указано"
-    piastrix_display = piastrix if piastrix and piastrix.strip() else "❌ Не указано"
-    ton_display = ton if ton and ton.strip() else "❌ Не указано"
+    async with aiosqlite.connect(DB_NAME) as db:
+        query = """
+            SELECT deals.id, deals.buyer_id, deals.status, offers.direction, offers.amount 
+            FROM deals
+            JOIN offers ON deals.offer_id = offers.id
+            WHERE deals.buyer_id = ? OR deals.seller_id = ?
+            ORDER BY deals.id DESC LIMIT 5
+        """
+        async with db.execute(query, (user_id, user_id)) as cursor:
+            my_history = await cursor.fetchall()
+
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+    ])
+
+    if not my_history:
+        await callback.message.edit_text("📜 Ваша история сделок пока пуста. Вы еще не совершали обменов.", reply_markup=kb)
+        return
+
+    text = "📜 **Вашие последние 5 P2P-сделок:**\n\n"
+    for d_id, b_id, status, direction, amount in my_history:
+        role = "Покупатель 🟩" if user_id == b_id else "Продавец 🟥"
+        
+        status_labels = {
+            'completed': '✅ Успешно завершена',
+            'cancelled': '❌ Отменена / Аннулирована',
+            'dispute': '🚨 Диспут (Разбирательство)'
+        }
+        st_text = status_labels.get(status, status)
+        
+        dir_labels = {"gram_card": "GRAM ⇄ Карты", "gram_piastrix": "GRAM ⇄ Piastrix", "card_piastrix": "Карты ⇄ Piastrix"}
+        dir_text = dir_labels.get(direction, direction)
+
+        text += f"• **Сделка #{d_id}** ({dir_text})\n" \
+                f"  └ Объем: `{amount}`\n" \
+                f"  └ Ваша роль: {role}\n" \
+                f"  └ Статус: {st_text}\n\n"
+
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
+# --- РАЗДЕЛ: НАСТРОЙКА РЕКВИЗИТОВ (СТРОГО НА ОДНОМ ЭКРАНЕ) ---
+@router.callback_query(F.data == "lk_requisites")
+async def show_requisites_menu(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.clear()
+    user_id = callback.from_user.id
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", (user_id,)) as cursor:
+            req = await cursor.fetchone()
+            
+    card, piastrix, ton = req if req else ("", "", "")
     
     text = (
-        f"⚙️ **Ваши платежные реквизиты для сделок:**\n\n"
-        f"💳 **Банковская карта:**\n`{card_display}`\n\n"
-        f"📱 **Кошелек Piastrix:**\n`{piastrix_display}`\n\n"
-        f"💎 **TON (GRAM) кошелек:**\n`{ton_display}`\n\n"
-        f"Вы можете в любой момент обновить их, нажав на кнопки ниже."
+        f"⚙️ **Ваши сохраненные реквизиты для выплат:**\n\n"
+        f"💳 Банковские карты:\n`{card if card else 'не указано'}`\n\n"
+        f"📱 Эл. кошелек Piastrix:\n`{piastrix if piastrix else 'не указано'}`\n\n"
+        f"💎 Адрес TON (Wallet):\n`{ton if ton else 'не указано'}`\n\n"
+        f"Используйте кнопки ниже для быстрого изменения данных:"
     )
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✏ Изменить Карту", callback_data="edit_card")],
-        [types.InlineKeyboardButton(text="✏ Изменить Piastrix", callback_data="edit_piastrix")],
-        [types.InlineKeyboardButton(text="✏ Изменить TON", callback_data="edit_ton")],
+        [types.InlineKeyboardButton(text="Изменить Карты 💳", callback_data="req_edit_card")],
+        [types.InlineKeyboardButton(text="Изменить Piastrix 📱", callback_data="req_edit_piastrix")],
+        [types.InlineKeyboardButton(text="Изменить TON 💎", callback_data="req_edit_ton")],
         [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
     ])
     
-    try:
-        await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-    except Exception:
-        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
-
-# --- БЛОК ХЭНДЛЕРОВ ИЗМЕНЕНИЯ С ИСПРАВЛЕННЫМИ ФИЛЬТРАМИ AIOGRAM 3 ---
-
-@router.callback_query(F.data == "edit_card")
-async def edit_card_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.set_state(RequisitesStates.waiting_for_card)
-    await callback.message.answer("💳 **Ввод карты:**\nПришлите в ответном сообщении номер вашей карты, название банка и имя получателя:")
-
-# ИСПРАВЛЕНО: Явное указание StateFilter для Aiogram 3
-@router.message(StateFilter(RequisitesStates.waiting_for_card), F.text)
-async def edit_card_save(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    text = message.text.strip()
-    await state.clear()
-    
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE requisites SET card = ? WHERE tg_id = ?", (text, user_id))
-        await db.commit()
-        
-    await message.answer("✅ Реквизиты банковской карты успешно сохранены!")
-    await render_requisites(message, user_id)
-
-@router.callback_query(F.data == "edit_piastrix")
-async def edit_piastrix_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.set_state(RequisitesStates.waiting_for_piastrix)
-    await callback.message.answer("📱 **Ввод Piastrix:**\nПришлите в ответном сообщении номер вашего кошелька Piastrix (например, P12345678):")
-
-# ИСПРАВЛЕНО: Явное указание StateFilter для Aiogram 3
-@router.message(StateFilter(RequisitesStates.waiting_for_piastrix), F.text)
-async def edit_piastrix_save(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    text = message.text.strip()
-    await state.clear()
-    
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE requisites SET piastrix = ? WHERE tg_id = ?", (text, user_id))
-        await db.commit()
-        
-    await message.answer("✅ Реквизиты Piastrix успешно сохранены!")
-    await render_requisites(message, user_id)
-
-@router.callback_query(F.data == "edit_ton")
-async def edit_ton_start(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.set_state(RequisitesStates.waiting_for_ton)
-    await callback.message.answer("💎 **Ввод TON:**\nПришлите ваш TON-адрес (EQ... / UQ...) и Memo через пробел (если он нужен):")
-
-# ИСПРАВЛЕНО: Явное указание StateFilter для Aiogram 3
-@router.message(StateFilter(RequisitesStates.waiting_for_ton), F.text)
-async def edit_ton_save(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    text = message.text.strip()
-    await state.clear()
-    
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE requisites SET ton = ? WHERE tg_id = ?", (text, user_id))
-        await db.commit()
-        
-    await message.answer("✅ Реквизиты TON (GRAM) успешно сохранены!")
-    await render_requisites(message, user_id)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
