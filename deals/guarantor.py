@@ -84,13 +84,12 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
 async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
     
+    # ⚡ ПУЛЕНЕПРОБИВАЕМЫЙ ПАРСИНГ: ID сделки — это ВСЕГДА самое последнее число в строке
     parts = callback.data.split("_")
-    action = parts[-2]  # 'gcomplete' или 'gcancel'
     deal_id = int(parts[-1])
     user_id = callback.from_user.id
     
-    # ⚡ ИСПРАВЛЕНО: Заново выгружаем ВСЕ поля сделки из БД строго по deal_id, 
-    # чтобы избежать ошибок распаковки кортежей из других окон навигации!
+    # Заново выгружаем все поля сделки из БД строго по числу deal_id
     async with aiosqlite.connect(DB_NAME) as db:
         query = "SELECT buyer_id, seller_id, status, guarantor_id, offer_id FROM deals WHERE id = ?"
         async with db.execute(query, (deal_id,)) as cursor:
@@ -112,12 +111,12 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
-        # 🎉 А: Ручной выпуск средств Гарантом
-        if action == "gcomplete":
+        # 🎉 А: Ручной выпуск средств Гарантом (Ищем подстроку 'gcomplete' в callback.data)
+        if "gcomplete" in callback.data:
             await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (buyer_id,))
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
-            await db.commit()
+            await db.commit() # Жестко фиксируем на диск!
             
             kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
                 [types.InlineKeyboardButton(text=f"⭐️ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)],
@@ -142,11 +141,11 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
             )
             return
 
-        # ❌ Б: Ручная отмена сделки Гарантом
-        elif action == "gcancel":
+        # ❌ Б: Ручная отмена сделки Гарантом (Ищем подстроку 'gcancel' в callback.data)
+        elif "gcancel" in callback.data:
             await db.execute("UPDATE deals SET status = 'cancelled' WHERE id = ?", (deal_id,))
             await db.execute("UPDATE offers SET status = 'active' WHERE id = ?", (offer_id,))
-            await db.commit()
+            await db.commit() # Жестко фиксируем на диск!
             
             cancel_text = f"❌ **Сделка #{deal_id} ОТМЕНЕНА ГАРАНТОМ!**\nЗаявка вернулась в стакан, средства подлежат возврату."
             await callback.message.edit_text(f"❌ Вы успешно отменили сделку #{deal_id}. Ордер возвращен в стакан.")
@@ -154,4 +153,3 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
             await bot.send_message(chat_id=buyer_id, text=cancel_text)
             await bot.send_message(chat_id=seller_id, text=cancel_text)
             return
-
