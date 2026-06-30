@@ -299,16 +299,21 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
             await callback.message.edit_text(f"✅ Вы успешно закрыли сделку #{deal_id} в качестве Гаранта.")
             
+            # Отправляем сообщение Покупателю
             await bot.send_message(
                 chat_id=buyer_id,
-                text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\nПожалуйста, оцените работу Продавца от 1 до 5 звёзд:",
+                text=f"🎉 **Сделка #{deal_id} успешно завершена!**\n"
+                     f"Продавец подтвердил получение средств. Пожалуйста, оцените Продавца от 1 до 5 звёзд:",
                 reply_markup=kb_rate_seller
             )
+            return
+
             await bot.send_message(
                 chat_id=seller_id,
                 text=f"🎉 **Сделка #{deal_id} успешно завершена Гарантом!**\nПожалуйста, оцените работу Покупателя от 1 до 5 звёзд:",
                 reply_markup=kb_rate_buyer
             )
+            return
 
         # --- Действие Гаранта: Ручная отмена сделки ---
         elif action == "gcancel":
