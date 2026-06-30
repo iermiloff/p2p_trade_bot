@@ -269,11 +269,10 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
     else:
         role_text = "Продавец 🟥"
     
-    # --- ВЕТКА А: КНОПКИ ДЛЯ ГАРАНТА КОМЬЮНИТИ ---
     if tg_id == guarantor_id:
         kb = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
-            [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")],
+            [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"guarantor_complete_{deal_id}")],
+            [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"guarantor_cancel_{deal_id}")],
             [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
         ])
     
