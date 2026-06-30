@@ -11,7 +11,6 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
     
     user_id = callback.from_user.id
-    # Гарантированно берем ID сделки с самого конца строки
     deal_id = int(callback.data.split("_")[-1]) 
     
     # 1. Защита от конфликта гарантов
@@ -50,7 +49,6 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
     s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не указано")
         
-    # Пульт управления для Гаранта (Четкий синтаксис callback_data из 4 элементов)
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"deal_action_gcomplete_{deal_id}")],
         [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"deal_action_gcancel_{deal_id}")]
@@ -67,8 +65,6 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
         parse_mode="Markdown"
     )
     
-    # ⚡ ПРИНУДИТЕЛЬНЫЙ АВТО-ВЫВОД КНОПКИ ПОКУПАТЕЛЮ:
-    # Гарант зашел, значит Покупатель обязан МГНОВЕННО получить рабочий пульт взамен заглушки ожидания
     kb_buyer_pay = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="🟩 Я перевел средства Гаранту", callback_data=f"deal_action_paid_{deal_id}")]
     ])
@@ -88,14 +84,16 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
 async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
     
-    # ⚡ ЖЕСТКИЙ ПРЯМОЙ ПАРСИНГ: Извлекаем экшен и ID по точным индексам (строго делим строку deal_action_gcomplete_ID)
     parts = callback.data.split("_")
-    action = parts[2]         # Индекс 2 — это строго 'gcomplete' или 'gcancel'
-    deal_id = int(parts[3])    # Индекс 3 — это строго числовой ID сделки
+    action = parts[-2]  # 'gcomplete' или 'gcancel'
+    deal_id = int(parts[-1])
     user_id = callback.from_user.id
     
+    # ⚡ ИСПРАВЛЕНО: Заново выгружаем ВСЕ поля сделки из БД строго по deal_id, 
+    # чтобы избежать ошибок распаковки кортежей из других окон навигации!
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT buyer_id, seller_id, status, guarantor_id, offer_id FROM deals WHERE id = ?", (deal_id,)) as cursor:
+        query = "SELECT buyer_id, seller_id, status, guarantor_id, offer_id FROM deals WHERE id = ?"
+        async with db.execute(query, (deal_id,)) as cursor:
             deal = await cursor.fetchone()
             
     if not deal:
@@ -104,6 +102,7 @@ async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
         
     buyer_id, seller_id, status, guarantor_id, offer_id = deal
     
+    # Жесткая проверка прав именно этого назначенного Гаранта
     if not guarantor_id or guarantor_id != user_id:
         await callback.answer("⚠️ Вы не являетесь назначенным Гарантом этой сделки!", show_alert=True)
         return
