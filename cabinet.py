@@ -264,17 +264,25 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
     role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
     
     if status == 'waiting_payment':
-        if tg_id == buyer_id:
-            btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+        # 🛡️ АНТИ-ФРОД: Если сделка с Гарантом, но guarantor_id в кортеже (индекс 4) отсутствует/равен нулю
+        if use_guarantor == 1 and (active_deal[4] is None or active_deal[4] == 0 or not active_deal[4]):
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")],
+                [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")],
                 [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
             ])
-        elif tg_id == seller_id:
-            kb = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")],
-                [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
-            ])
+        else:
+            if tg_id == buyer_id:
+                btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text=btn_text, callback_data=f"deal_action_paid_{deal_id}")],
+                    [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                ])
+            elif tg_id == seller_id:
+                kb = types.InlineKeyboardMarkup(inline_keyboard=[
+                    [types.InlineKeyboardButton(text="⏳ Ожидаем оплату от Покупателя", callback_data="dummy_waiting_pay")],
+                    [types.InlineKeyboardButton(text="⬅ Назад в меню", callback_data="open_main_menu")]
+                ])
+
     elif status == 'waiting_delivery':
         if tg_id == seller_id:
             kb = types.InlineKeyboardMarkup(inline_keyboard=[
