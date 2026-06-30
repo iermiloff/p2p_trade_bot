@@ -133,7 +133,8 @@ async def is_user_guarantor(tg_id: int) -> bool:
         async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             res = await cursor.fetchone()
             
-    if res and res[0] == "guarantor_member":
+    # ⚡ ИСПРАВЛЕНО: Разрешаем доступ пользователям с любым из этих двух вариантов роли в БД
+    if res and res[0] in ["guarantor_member", "guarantor"]:
         return True
     return False
 
