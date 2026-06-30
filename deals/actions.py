@@ -1,7 +1,7 @@
 import aiosqlite
 import time
 from aiogram import Router, F, types, Bot
-from config import ADMIN_IDS
+from config import ADMIN_IDS, ADMIN_CHAT_ID
 from database import DB_NAME
 
 router = Router()
