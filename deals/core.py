@@ -75,8 +75,14 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         reply_markup=kb_seller
     )
     
-    fee_text = "\n\n⚠️ **Обратите внимание:** Вы выбрали безопасную сделку. Комиссия Гаранта составит **5%** от суммы обмена." if use_guarantor else ""
-    await callback.message.answer(f"⏳ Сделка #{deal_id} инициирована!\nЗапущен **Таймер 1 (10 минут)**. Ожидаем подтверждения от продавца...{fee_text}")
+    fee_text = "\n\n⚠️ **Обратите внимание:** Вы выбрали безопасную сделку. Комиссия Гаранта составит **10%** от суммы обмена." if use_guarantor else ""
+    
+    await callback.message.edit_text(
+        f"⏳ **Сделка #{deal_id} инициирована!**\n"
+        f"Запущен **Таймер 1 (10 минут)**. Ожидаем, пока Продавец примет или отклонит ваш запрос...{fee_text}",
+        parse_mode="Markdown"
+    )
+
 
 
 # --- ПУЛЕНЕПРОБИВАЕМЫЙ АНОНИМНЫЙ ЧАТ (ЗАЩИТА ОТ ИНЪЕКЦИЙ И DOS БЛОКИРОВОК) ---
