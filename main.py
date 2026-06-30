@@ -87,7 +87,7 @@ async def cmd_start(message: types.Message):
     # ⚡ 1. ПЕРВЫМ ДЕЛОМ ДЛЯ ВСЕХ ПРОВЕРЯЕМ АКТИВНУЮ СДЕЛКУ
     async with aiosqlite.connect(DB_NAME) as db:
         query = """
-            SELECT id, status, buyer_id, seller_id, use_guarantor 
+            SELECT id, status, buyer_id, seller_id, use_guarantor, guarantor_id 
             FROM deals 
             WHERE (buyer_id = ? OR seller_id = ?) 
             AND status IN ('waiting_payment', 'waiting_delivery', 'dispute')
@@ -102,17 +102,24 @@ async def cmd_start(message: types.Message):
         kb = None
         role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
         
+    if active_deal:
+        # Распаковываем все 6 полей
+        deal_id, status, buyer_id, seller_id, use_guarantor, guarantor_id = active_deal
+        
+        kb = None
+        role_text = "Покупатель" if tg_id == buyer_id else "Продавец"
+        status_text_addon = ""
+        
         # --- ФАЗА 1: ОЖИДАНИЕ ОПЛАТЫ ОТ ПОКУПАТЕЛЯ ---
         if status == 'waiting_payment':
-            # 🛡️ АНТИ-ФРОД: Если сделка через Гаранта, но сам Гарант её еще НЕ взял (guarantor_id пустой)
-            if use_guarantor == 1 and (active_deal[4] is None or active_deal[4] == 0 or not active_deal[4]):
+            # 🛡️ ЖЕСТКИЙ БЛОК: Сделка с Гарантом, но поле guarantor_id в базе пустует (None или 0)
+            if use_guarantor == 1 and (guarantor_id is None or guarantor_id == 0):
                 kb = types.InlineKeyboardMarkup(inline_keyboard=[
                     [types.InlineKeyboardButton(text="⏳ Ожидаем подключение Гаранта...", callback_data="dummy_waiting_g")]
                 ])
-                status_text_addon = "\n\n⚠️ **Внимание:** Сделка проходит через Гаранта. Пожалуйста, ничего не переводите, пока Гарант не подключится к анонимному чату и не скинет свои реквизиты!"
+                status_text_addon = "\n\n⚠️ **Внимание:** Сделка проходит через Гаранта. Пожалуйста, **НИЧЕГО НЕ ПЕРЕВОДИТЕ**, пока Гарант не подключится к анонимному чату и не скинет свои официальные реквизиты!"
             else:
-                # Гарант уже зашел (или сделка прямая) — выдаем стандартные пульты
-                status_text_addon = ""
+                # Гарант на месте (или сделка прямая) — выдаем рабочие кнопки
                 if tg_id == buyer_id:
                     btn_text = "🟩 Я перевел средства Гаранту" if use_guarantor else "🟩 Я перевел средства"
                     kb = types.InlineKeyboardMarkup(inline_keyboard=[
