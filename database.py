@@ -1,5 +1,8 @@
 import aiosqlite
-from constants import STATUS_LIMITS
+import random
+import time
+from config import ADMIN_IDS
+from constants import STATUS_LIMITS, TITLES
 
 DB_NAME = "p2p_bot.db"
 
@@ -133,8 +136,6 @@ async def is_user_guarantor(tg_id: int) -> bool:
     if res and res == "guarantor_member":
         return True
     return False
-
-from constants import TITLES  # Добавьте этот импорт в самый верх database.py, если его там нет
 
 async def get_user_title(deals_count: int, rating: float) -> str:
     """
