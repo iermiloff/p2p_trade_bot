@@ -66,15 +66,15 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 all_guarantor_ids = list(ADMIN_IDS)
                 try:
                     async with aiosqlite.connect(DB_NAME) as db:
-                        async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
+                        # ⚡ ИСПРАВЛЕНО: Теперь бот железно найдет и 'guarantor', и 'guarantor_member'
+                        async with db.execute("SELECT tg_id FROM users WHERE user_status IN ('guarantor_member', 'guarantor')") as g_cursor:
                             rows = await g_cursor.fetchall()
                             for row in rows:
-                                g_uid = row[0]  # ⚡ ЧЕТКО ДОСТАЕМ ЧИСЛО ИЗ КОРТЕЖА SQLite!
+                                g_uid = row[0]  # Достаем ID из кортежа
                                 if g_uid not in all_guarantor_ids: 
                                     all_guarantor_ids.append(g_uid)
                 except Exception as db_err:
                     print(f"[ОШИБКА БД ПРИ СБОРЕ ГАРАНТОВ]: {db_err}")
-
 
                 alert_g_text = f"🚨 **Требуется Гарант для сделки #{deal_id}!**\nНаправление: `{o_dir}`\nСумма/Объем: `{o_amt}`"
                 
@@ -179,10 +179,11 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             all_guarantor_ids = list(ADMIN_IDS)
             try:
                 async with aiosqlite.connect(DB_NAME) as db:
-                    async with db.execute("SELECT tg_id FROM users WHERE user_status = 'guarantor_member'") as g_cursor:
+                    # ⚡ ИСПРАВЛЕНО И ТУТ: Ищем обе роли
+                    async with db.execute("SELECT tg_id FROM users WHERE user_status IN ('guarantor_member', 'guarantor')") as g_cursor:
                         rows = await g_cursor.fetchall()
                         for row in rows:
-                            g_uid = row[0]  # ⚡ ЧЕТКО ДОСТАЕМ ЧИСЛО ИЗ КОРТЕЖА!
+                            g_uid = row[0]
                             if g_uid not in all_guarantor_ids: 
                                 all_guarantor_ids.append(g_uid)
             except Exception as db_err:
