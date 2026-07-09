@@ -1,266 +1,284 @@
+import math
 import aiosqlite
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import StateFilter
-from config import ADMIN_IDS
-from database import DB_NAME, get_user_title
-from constants import STATUS_NAMES, STATUS_LIMITS
+
+from database import DB_NAME, check_offer_limit, has_required_requisites
+from constants import DIRECTION_TITLES, STATUS_LIMITS
 
 router = Router()
 
+# Состояния FSM для публикации объявлений
 class OfferCreateStates(StatesGroup):
+    waiting_for_direction = State()
+    waiting_for_type = State()
     waiting_for_amount = State()
     waiting_for_rate = State()
 
-# --- ВЫБОР ДЕЙСТВИЯ В РАЗДЕЛЕ ОБМЕНА ---
-@router.callback_query(F.data.startswith("nav_"))
-async def process_navigation(callback: types.CallbackQuery, state: FSMContext):
+def get_offers_navigation_keyboard():
+    """Генерирует клавиатуру со всеми 4 новыми направлениями обмена (все к Картам)"""
+    return types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🤖 Крипта (Bot) ⇄ 💳 Карты", callback_data="nav_dir_crypto_bot")],
+        [types.InlineKeyboardButton(text="📈 Крипта (Bybit) ⇄ 💳 Карты", callback_data="nav_dir_bybit")],
+        [types.InlineKeyboardButton(text="🌐 Крипта (Другие) ⇄ 💳 Карты", callback_data="nav_dir_other_wallets")],
+        [types.InlineKeyboardButton(text="👛 FkWallet ⇄ 💳 Карты", callback_data="nav_dir_fkwallet")],
+        [types.InlineKeyboardButton(text="➕ Создать объявление", callback_data="offer_create_start")],
+        [types.InlineKeyboardButton(text="⬅ В главное меню", callback_data="open_main_menu")]
+    ])
+
+@router.callback_query(F.data == "nav_gram_card")
+async def process_p2p_hub(callback: types.CallbackQuery, state: FSMContext):
+    """Точка входа в P2P-маркет из главного меню"""
     await callback.answer()
     await state.clear()
-    direction = callback.data.replace("nav_", "")
     
-    dir_titles = {
-        "gram_card": "GRAM ⇄ Карты",
-        "gram_piastrix": "GRAM ⇄ Piastrix",
-        "card_piastrix": "Карты ⇄ Piastrix"
-    }
-    dir_text = dir_titles.get(direction, direction)
+    await callback.message.edit_text(
+        "💱 **P2P Торговая платформа**\n\n"
+        "Все сделки на платформе проходят **строго через асинхронного Гаранта** для защиты ваших средств.\n"
+        "Выберите интересующее вас направление обмена для просмотра стакана ордеров:",
+        reply_markup=get_offers_navigation_keyboard(),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data.startswith("nav_dir_"))
+async def process_direction_type_choice(callback: types.CallbackQuery):
+    """Выбор типа операции внутри выбранного направления: Купить или Продать"""
+    await callback.answer()
+    direction = callback.data.replace("nav_dir_", "") # Получаем 'bybit', 'crypto_bot' и т.д.
+    
+    dir_title = DIRECTION_TITLES.get(direction, direction)
     
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🔍 Посмотреть заявки", callback_data=f"view_sort_{direction}")],
-        [types.InlineKeyboardButton(text="➕ Создать заявку", callback_data=f"create_start_{direction}")],
-        [types.InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="open_main_menu")]
+        [
+            types.InlineKeyboardButton(text="🟢 Купить (Стакан Sell)", callback_data=f"view_offers_{direction}_sell_1_time"),
+            types.InlineKeyboardButton(text="🔴 Продать (Стакан Buy)", callback_data=f"view_offers_{direction}_buy_1_time")
+        ],
+        [types.InlineKeyboardButton(text="⬅ Назад к направлениям", callback_data="nav_gram_card")]
     ])
     
     await callback.message.edit_text(
-        f"📂 Раздел: **{dir_text}**\nЧто вы хотите сделать?", 
-        reply_markup=kb, 
+        f"Вы выбрали направление: **{dir_title}**\n\n"
+        f"• **Купить** — посмотреть объявления людей, которые продают крипту.\n"
+        f"• **Продать** — посмотреть объявления людей, которые готовы купить вашу крипту.\n\n"
+        f"Выберите тип операции:",
+        reply_markup=kb,
         parse_mode="Markdown"
     )
-
-# --- ВЫБОР ТИПА СОРТИРОВКИ ---
-@router.callback_query(F.data.startswith("view_sort_"))
-async def process_sorting_menu(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.clear()
-    direction = callback.data.replace("view_sort_", "")
-    
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🕒 По новизне (Свежие)", callback_data=f"view_page_{direction}_id_0")],
-        [types.InlineKeyboardButton(text="⭐ По рейтингу автора", callback_data=f"view_page_{direction}_rating_0")],
-        [types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"nav_{direction}")]
-    ])
-    
-    await callback.message.edit_text("Выберите тип сортировки объявлений в стакане:", reply_markup=kb)
-
-# --- ➕ НАЧАЛО СОЗДАНИЯ ЗАЯВКИ (СТРОГИЙ КОНТРОЛЬ ЛИМИТОВ ВЕРИФИКАЦИИ) ---
-@router.callback_query(F.data.startswith("create_start_"))
-async def start_create_offer(callback: types.CallbackQuery, state: FSMContext):
-    await callback.answer()
-    user_id = callback.from_user.id
-    direction = callback.data.replace("create_start_", "")
-    
-    if user_id in ADMIN_IDS:
-        await callback.message.answer("⚠️ Администраторам запрещено создавать торговые заявки.")
-        return
-
-    # Запрашиваем из базы данных статус верификации пользователя
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (user_id,)) as cursor:
-            res = await cursor.fetchone()
-            user_status = res[0] if res else "verified"
-
-        # ⚡ ИСПРАВЛЕНО: Извлекаем чистое число активных объявлений (разворачиваем кортеж)
-        async with db.execute("SELECT COUNT(*) FROM offers WHERE creator_id = ? AND status = 'active'", (user_id,)) as cursor:
-            count_res = await cursor.fetchone()
-            current_active_count = count_res[0] if count_res else 0
-
-    # Получаем лимит для статуса верификации из констант (обычная=1, продвинутая=3, супер=5, VIP=10)
-    max_allowed_limit = STATUS_LIMITS.get(user_status, 1)
-
-    if current_active_count >= max_allowed_limit:
-        await callback.message.answer(
-            f"⚠️ **Превышен лимит объявлений!**\n\n"
-            f"Для вашего уровня верификации доступно максимум активных объявлений: **{max_allowed_limit}**.\n"
-            f"У вас в стакане уже открыто: **{current_active_count}**.\n\n"
-            f"Дождитесь завершения сделок или закройте старые ордера."
-        )
-        return
-
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [
-            types.InlineKeyboardButton(text="🟢 Хочу Купить", callback_data=f"create_type_{direction}_buy"),
-            types.InlineKeyboardButton(text="🔴 Хочу Продать", callback_data=f"create_type_{direction}_sell")
-        ],
-        [types.InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"nav_{direction}")]
-    ])
-    await callback.message.edit_text("Вы хотите выставить объявление о **Покупке** или **Продаже** актива?", reply_markup=kb, parse_mode="Markdown")
-# --- 🔍 ИНТЕРАКТИВНЫЙ СТАКАН ОРДЕРОВ С ПАГИНАЦИЕЙ ПО 5 ШТУК ---
-@router.callback_query(F.data.startswith("view_page_"))
-async def show_offers_page(callback: types.CallbackQuery):
+@router.callback_query(F.data.startswith("view_offers_"))
+async def display_offers_ стакан(callback: types.CallbackQuery):
+    """Вывод списка ордеров с поддержкой пагинации, сортировки (time/rate) и только через Гаранта"""
     await callback.answer()
     
-    # Структура callback_data: view_page_[direction]_[sort_type]_[page]
+    # Шаблон callback_data: view_offers_[direction]_[offer_type]_[page]_[sort_by]
     parts = callback.data.split("_")
-    page = int(parts[-1])
-    sort_type = parts[-2]
-    direction = f"{parts[-4]}_{parts[-3]}"
+    direction = parts[2]
+    offer_type = parts[3]
+    page = int(parts[4])
+    sort_by = parts[5] # 'time' или 'rate'
     
-    # Вычисляем сисадминский отступ для постраничной пагинации SQL
     limit = 5
-    offset = page * limit
+    offset = (page - 1) * limit
     
-    # Жесткие и статичные запросы для 100% защиты от SQL-инъекций
-    if sort_type == "id":
-        query = f"""
-            SELECT offers.id, offers.offer_type, offers.amount, offers.rate, 
-                   users.nickname, users.rating, users.deals_count
-            FROM offers 
+    # Формируем SQL-запрос в зависимости от типа сортировки
+    if sort_by == "rate":
+        # Сортировка по рейтингу создателя (от большего к меньшему)
+        query = """
+            SELECT offers.id, offers.creator_id, offers.amount, offers.rate, users.nickname, users.rating, users.deals_count
+            FROM offers
             JOIN users ON offers.creator_id = users.tg_id
-            WHERE offers.direction = ? AND offers.status = 'active'
-            ORDER BY offers.id DESC LIMIT {limit} OFFSET {offset}
+            WHERE offers.direction = ? AND offers.offer_type = ? AND offers.status = 'active'
+            ORDER BY users.rating DESC, offers.id DESC
+            LIMIT ? OFFSET ?
         """
     else:
-        query = f"""
-            SELECT offers.id, offers.offer_type, offers.amount, offers.rate, 
-                   users.nickname, users.rating, users.deals_count
-            FROM offers 
+        # Сортировка по новизне (сначала новые лоты)
+        query = """
+            SELECT offers.id, offers.creator_id, offers.amount, offers.rate, users.nickname, users.rating, users.deals_count
+            FROM offers
             JOIN users ON offers.creator_id = users.tg_id
-            WHERE offers.direction = ? AND offers.status = 'active'
-            ORDER BY users.rating DESC, offers.id DESC LIMIT {limit} OFFSET {offset}
+            WHERE offers.direction = ? AND offers.offer_type = ? AND offers.status = 'active'
+            ORDER BY offers.id DESC
+            LIMIT ? OFFSET ?
         """
         
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(query, (direction,)) as cursor:
-            offers = await cursor.fetchall()
+        # Считаем общее число подходящих активных объявлений для пагинации
+        count_query = "SELECT COUNT(*) FROM offers WHERE direction = ? AND offer_type = ? AND status = 'active'"
+        async with db.execute(count_query, (direction, offer_type)) as c_cursor:
+            total_offers = (await c_cursor.fetchone())[0]
             
-        # Проверяем, есть ли ордера на СЛЕДУЮЩЕЙ странице для отрисовки кнопки "Вперед"
-        async with db.execute(
-            "SELECT COUNT(*) FROM offers WHERE direction = ? AND status = 'active'", (direction,)
-        ) as cursor:
-            total_res = await cursor.fetchone()
-            total_count = total_res[0] if total_res else 0
-
-    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="⬅️ Назад к сортировке", callback_data=f"view_sort_{direction}")]
+        # Загружаем порцию лотов для текущей страницы
+        async with db.execute(query, (direction, offer_type, limit, offset)) as cursor:
+            offers_list = await cursor.fetchall()
+            
+    max_pages = math.ceil(total_offers / limit) if total_offers > 0 else 1
+    dir_title = DIRECTION_TITLES.get(direction, direction)
+    type_title = "Покупка (Вы продаете)" if offer_type == "buy" else "Продажа (Вы покупаете)"
+    
+    kb_list = []
+    
+    # Кнопки переключения сортировки в шапке стакана
+    time_active = "🔹 " if sort_by == "time" else ""
+    rate_active = "🔹 " if sort_by == "rate" else ""
+    kb_list.append([
+        types.InlineKeyboardButton(text=f"{time_active}Новые", callback_data=f"view_offers_{direction}_{offer_type}_{page}_time"),
+        types.InlineKeyboardButton(text=f"{rate_active}По рейтингу", callback_data=f"view_offers_{direction}_{offer_type}_{page}_rate")
     ])
     
-    if not offers and page == 0:
-        await callback.message.edit_text("📭 В данном направлении пока нет активных заявок.", reply_markup=kb_back)
-        return
-        
-    dir_labels = {"gram_card": "GRAM ⇄ Карты", "gram_piastrix": "GRAM ⇄ Piastrix", "card_piastrix": "Карты ⇄ Piastrix"}
-    sort_labels = {"id": "🕒 По новизне", "rating": "⭐ По рейтингу автора"}
+    text = f"📊 **Стакан объявлений: {dir_title}**\nРежим: _{type_title}_\nСтраница: `{page}/{max_pages}`\n\n"
     
-    text = (
-        f"📊 **Торговый стакан ордеров ({dir_labels.get(direction, direction)})**\n"
-        f"🔍 Сортировка: _{sort_labels.get(sort_type, sort_type)}_\n"
-        f"📄 Страница: **{page + 1}** (Всего активных лотов: {total_count})\n"
-        f"────────────────────\n\n"
-    )
-    
-    # Собираем пачку инлайн-кнопок действий для каждого выведенного ордера
-    inline_keyboard = []
-    
-    for offer_id, o_type, amount, rate, nick, rating, deals_cnt in offers:
-        type_emoji = "🟢" if o_type == "buy" else "🔴"
-        type_text = "КУПИТ" if o_type == "buy" else "ПРОДАСТ"
-        user_title = await get_user_title(deals_cnt, rating)
-        
-        text += (
-            f"🆔 **Ордер #{offer_id}** | {type_emoji} **{type_text}**\n"
-            f"👤 Автор: {nick} ({user_title})\n"
-            f"📊 Репутация: ⭐ {rating:.2f} | 🤝 Сделок: {deals_cnt}\n"
-            f"💰 Объем: `{amount}`\n"
-            f"📈 Курс/Условия: `{rate}`\n"
-            f"────────────────────\n\n"
-        )
-        # Кнопка быстрого открытия сделки прямо по ID ордера
-        inline_keyboard.append([
-            types.InlineKeyboardButton(text=f"🤝 Начать обмен #{offer_id}", callback_data=f"deal_open_direct_{offer_id}"),
-            types.InlineKeyboardButton(text=f"🛡️ С Гарантом #{offer_id}", callback_data=f"deal_open_guarantor_{offer_id}")
-        ])
-        
-    # Формируем стрелочки постраничного листания ордеров (Вперед / Назад)
+    if not offers_list:
+        text += "📭 В данном разделе пока нет активных объявлений. Вы можете создать своё!"
+    else:
+        for offer_id, creator_id, amount, rate, nick, rating, deals in offers_list:
+            text += f"▪️ **Лот #{offer_id}**\n" \
+                    f"  ├ Объем/Сумма: `{amount}`\n" \
+                    f"  ├ Курс/Условия: `{rate}`\n" \
+                    f"  └ Трейдер: {nick} (⭐{rating:.2f} | ✔️{deals} сделок)\n\n"
+            
+            # СТРОГО ОДНА КНОПКА: Инициализация безопасного обмена через Гаранта
+            kb_list.append([
+                types.InlineKeyboardButton(text=f"🤝 Начать обмен по Лоту #{offer_id}", callback_data=f"deal_open_init_{offer_id}")
+            ])
+            
+    # Нижняя навигация (Стрелочки пагинации)
     nav_row = []
-    if page > 0:
-        nav_row.append(types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"view_page_{direction}_{sort_type}_{page - 1}"))
-    if total_count > (offset + limit):
-        nav_row.append(types.InlineKeyboardButton(text="Вперед ➡️", callback_data=f"view_page_{direction}_{sort_type}_{page + 1}"))
+    if page > 1:
+        nav_row.append(types.InlineKeyboardButton(text="⬅ Назад", callback_data=f"view_offers_{direction}_{offer_type}_{page-1}_{sort_by}"))
+    if page < max_pages:
+        nav_row.append(types.InlineKeyboardButton(text="Вперед ➡", callback_data=f"view_offers_{direction}_{offer_type}_{page+1}_{sort_by}"))
         
     if nav_row:
-        inline_keyboard.append(nav_row)
+        kb_list.append(nav_row)
         
-    # Добавляем системную кнопку возврата
-    inline_keyboard.append([types.InlineKeyboardButton(text="⬅️ Назад к сортировке", callback_data=f"view_sort_{direction}")])
+    # Кнопка возврата в меню навигации
+    kb_list.append([types.InlineKeyboardButton(text="⬅ Назад к направлениям", callback_data=f"nav_dir_{direction}")])
     
-    kb_pagination = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-    
-    # Выводим стакан строго РЕДАКТИРОВАНИЕМ сообщения — бесшовно и без флуда
-    await callback.message.edit_text(text, reply_markup=kb_pagination, parse_mode="Markdown")
-
-
-# --- ➕ СОХРАНЕНИЕ ДАННЫХ И ШАГИ СОЗДАНИЯ ЗАЯВОК ПОЛЬЗОВАТЕЛЯМИ ---
-
-@router.callback_query(F.data.startswith("create_type_"))
-async def save_offer_type(callback: types.CallbackQuery, state: FSMContext):
+    try:
+        await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_list), parse_mode="Markdown")
+    except Exception:
+        # Защита от ошибок aiogram, если пользователь нажал на уже выбранный тип сортировки
+        pass
+@router.callback_query(F.data == "offer_create_start")
+async def start_offer_creation(callback: types.CallbackQuery, state: FSMContext):
+    """Инициализация создания объявления с проверкой лимитов активности"""
     await callback.answer()
+    user_id = callback.from_user.id
     
-    parts = callback.data.split("_")
-    direction = f"{parts[-3]}_{parts[-2]}"
-    offer_type = parts[-1]
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Проверяем уровень верификации и статус роли пользователя
+        async with db.execute("SELECT is_verified, user_status FROM users WHERE tg_id = ?", (user_id,)) as cursor:
+            u_data = await cursor.fetchone()
+            
+    if not u_data:
+        await callback.message.edit_text("❌ Ошибка: Ваш профиль не найден.")
+        return
+        
+    is_verified, user_status = u_data
+    
+    if is_verified != 1:
+        kb_kyc = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="Пройти верификацию", callback_data="start_verification")]
+        ])
+        await callback.message.edit_text("🛑 **Доступ ограничен!**\nВы не можете публиковать объявления в стакан, пока не пройдете верификацию у администратора.", reply_markup=kb_kyc, parse_mode="Markdown")
+        return
+        
+    # Проверка лимитов на количество активных объявлений
+    current_active_count = await check_offer_limit(user_id)
+    max_allowed = STATUS_LIMITS.get(user_status, 1)
+    
+    if current_active_count >= max_allowed:
+        kb_back = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="⬅ Назад в P2P", callback_data="nav_gram_card")]
+        ])
+        await callback.message.edit_text(
+            f"🛑 **Лимит превышен!**\nВаш текущий ранг позволяет иметь не более `{max_allowed}` активных лотов в стакане.\n"
+            f"У вас уже открыто: `{current_active_count}` лотов. Удалите старые, чтобы создать новый.",
+            reply_markup=kb_back,
+            parse_mode="Markdown"
+        )
+        return
+
+    # Запускаем FSM процесс
+    await state.set_state(OfferCreateStates.waiting_for_direction)
+    
+    kb_dirs = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🤖 Крипта (Bot) ⇄ Карты", callback_data="create_dir_crypto_bot")],
+        [types.InlineKeyboardButton(text="📈 Крипта (Bybit) ⇄ Карты", callback_data="create_dir_bybit")],
+        [types.InlineKeyboardButton(text="🌐 Крипта (Другие) ⇄ Карты", callback_data="create_dir_other_wallets")],
+        [types.InlineKeyboardButton(text="👛 FkWallet ⇄ Карты", callback_data="create_dir_fkwallet")],
+        [types.InlineKeyboardButton(text="❌ Отмена", callback_data="nav_gram_card")]
+    ])
+    
+    await callback.message.edit_text("➕ **Создание объявления**\nШаг 1/4: Выберите платежное направление вашего лота:", reply_markup=kb_dirs, parse_mode="Markdown")
+
+@router.callback_query(StateFilter(OfferCreateStates.waiting_for_direction), F.data.startswith("create_dir_"))
+async def process_create_direction(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    direction = callback.data.replace("create_dir_", "")
+    await state.update_data(direction=direction)
+    
+    await state.set_state(OfferCreateStates.waiting_for_type)
+    
+    kb_type = types.InlineKeyboardMarkup(inline_keyboard=[
+        [
+            types.InlineKeyboardButton(text="🟢 Я ПОКУПАЮ (Buy-лот)", callback_data="create_type_buy"),
+            types.InlineKeyboardButton(text="🔴 Я ПРОДАЮ (Sell-лот)", callback_data="create_type_sell")
+        ],
+        [types.InlineKeyboardButton(text="❌ Отмена", callback_data="nav_gram_card")]
+    ])
+    
+    await callback.message.edit_text(
+        "➕ **Создание объявления**\nШаг 2/4: Выберите тип вашего объявления:\n\n"
+        "• `Я ПОКУПАЮ` — вы отдаете рубли с карты и хотите получить актив (монеты).\n"
+        "• `Я ПРОДАЮ` — вы отдаете актив (монеты) и хотите получить рубли на карту.",
+        reply_markup=kb_type,
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(StateFilter(OfferCreateStates.waiting_for_type), F.data.startswith("create_type_"))
+async def process_create_type(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    o_type = callback.data.replace("create_type_", "")
+    await state.update_data(offer_type=o_type)
     
     await state.set_state(OfferCreateStates.waiting_for_amount)
-    await state.update_data(direction=direction, offer_type=offer_type)
     
-    await callback.message.answer(
-        "✍️ **Шаг 1 из 2: Укажите объем.**\n"
-        "Введите сумму или количество средств для обмена (например: `500 GRAM` или `15 000 RUB`):",
-        parse_mode="Markdown"
-    )
+    kb_cancel = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="❌ Отмена", callback_data="nav_gram_card")]])
+    await callback.message.edit_text("➕ **Создание объявления**\nШаг 3/4: Введите в ответном сообщении **Объем / Сумму** сделки (например: `150 USDT` или `10 000 RUB`):", reply_markup=kb_cancel, parse_mode="Markdown")
 
 @router.message(StateFilter(OfferCreateStates.waiting_for_amount), F.text)
-async def process_amount_input(message: types.Message, state: FSMContext):
-    amount = message.text.strip()
-    await state.update_data(amount=amount)
+async def process_create_amount_text(message: types.Message, state: FSMContext):
+    amount_raw = message.text.strip().replace("<", "&lt;").replace(">", "&gt;")
+    await state.update_data(amount=amount_raw)
+    
     await state.set_state(OfferCreateStates.waiting_for_rate)
     
-    await message.answer(
-        "✍️ **Шаг 2 из 2: Укажите условия.**\n"
-        "Введите желаемый курс обмена или банки/кошельки, с которыми вы работаете (например: `По курсу 1.2$ / Сбербанк, Тинькофф`):",
-        parse_mode="Markdown"
-    )
+    kb_cancel = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="❌ Отмена", callback_data="nav_gram_card")]])
+    await message.answer("➕ **Создание объявления**\nШаг 4/4: Укажите **Курс или условия** обмена (например: `По курсу СБЕР +2%` или `1 USDT = 94.5 RUB`):", reply_markup=kb_cancel, parse_mode="Markdown")
 
 @router.message(StateFilter(OfferCreateStates.waiting_for_rate), F.text)
-async def process_rate_and_save_offer(message: types.Message, state: FSMContext):
-    rate = message.text.strip()
+async def process_create_final_saving(message: types.Message, state: FSMContext):
+    rate_raw = message.text.strip().replace("<", "&lt;").replace(">", "&gt;")
+    user_id = message.from_user.id
+    
     data = await state.get_data()
     await state.clear()
     
-    user_id = message.from_user.id
     direction = data["direction"]
     offer_type = data["offer_type"]
     amount = data["amount"]
     
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
-            "INSERT INTO offers (creator_id, direction, offer_type, amount, rate) VALUES (?, ?, ?, ?, ?)",
-            (user_id, direction, offer_type, amount, rate)
+            "INSERT INTO offers (creator_id, direction, offer_type, amount, rate, status) VALUES (?, ?, ?, ?, ?, 'active')",
+            (user_id, direction, offer_type, amount, rate_raw)
         )
         await db.commit()
         
-    type_label = "🟢 КУПЛЮ" if offer_type == "buy" else "🔴 ПРОДАМ"
-    
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Вернуться в меню обмена", callback_data=f"nav_{direction}")]])
-    await message.answer(
-        f"🎉 **Ваше P2P-объявление успешно опубликовано в стакане!**\n\n"
-        f"📋 Данные заявки:\n"
-        f"• Тип: **{type_label}**\n"
-        f"• Объем: `{amount}`\n"
-        f"• Условия/Курс: `{rate}`\n\n"
-        f"Как только контрагент примет ордер, бот моментально пришлет вам уведомление в этот чат.",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-
+    kb_done = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🔄 Открыть P2P Маркет", callback_data="nav_gram_card")]
+    ])
+    await message.answer("🎉 **Объявление успешно опубликовано!**\nВаш лот добавлен в торговый стакан платформы и доступен другим трейдерам.", reply_markup=kb_done, parse_mode="Markdown")
