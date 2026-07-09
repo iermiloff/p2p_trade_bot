@@ -6,7 +6,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 
 # Импортируем конфигурацию, базу и константы
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ADMIN_IDS
 from database import init_db, has_active_deal
 from constants import DEAL_STATUS_NAMES
 
