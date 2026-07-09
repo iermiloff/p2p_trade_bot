@@ -41,17 +41,27 @@ def get_main_keyboard():
 
 @router.callback_query(F.data == "open_main_menu")
 async def open_menu_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Возврат в Главное меню с жестким разделением: Юзер / Админ"""
     await callback.answer()
     await state.clear()
     user_id = callback.from_user.id
+    
+    # Если это Администратор — принудительно включаем админку и блокируем P2P-меню
     if user_id in ADMIN_IDS:
-        import admin
+        import admin # Локальный импорт для генерации кнопок
         await callback.message.edit_text(
-            "🛠 **Панель управления Администратора P2P**\n\nВыберите раздел для модерации:",
+            "🛠 **Панель управления Администратора P2P**\n\nВыберите необходимый раздел для модерации платформы:",
             reply_markup=admin.get_admin_keyboard()
         )
     else:
-        await callback.message.edit_text("🏠 **Главное меню P2P платформы:**", reply_markup=get_main_keyboard())
+        # Если обычный пользователь — отдаем стандартный P2P-интерфейс
+        await callback.message.edit_text(
+            "🏠 **Главное меню P2P платформы:**\n\n"
+            "🛡 Все операции проходят строго через асинхронного Гаранта системы для исключения мошенничества и блокировок по 115-ФЗ.\n\n"
+            "Используйте интерактивное меню ниже для работы:",
+            reply_markup=get_main_keyboard(),
+            parse_mode="Markdown"
+        )
 
 @router.callback_query(F.data == "lk_stats")
 async def show_statistics(callback: types.CallbackQuery, state: FSMContext):
