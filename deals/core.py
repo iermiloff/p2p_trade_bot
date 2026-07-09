@@ -72,9 +72,9 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         
     dir_title = DIRECTION_TITLES.get(direction, direction)
     
-    # Импортируем функцию рендеринга интерфейсов, которую мы пропишем в actions.py
-    from actions import send_deal_interface_to_user
-    
+ #Указываем правильный путь из папки deals
+from deals.actions import send_deal_interface_to_user
+
     # Отправляем интерфейсы шага депонирования обоим участникам
     await send_deal_interface_to_user(bot, seller_id, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
     await send_deal_interface_to_user(bot, buyer_id_final, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
