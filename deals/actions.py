@@ -137,33 +137,29 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
     # --- ДЕЙСТВИЕ 1: Продавец нажал "Я депонировал крипту" ---
     if action == "deposited" and user_id == seller_id and status == "waiting_deposit":
-        async with aiosqlite.connect(DB_NAME) as db:
-            query_offer = "SELECT direction, amount FROM offers WHERE id = ?"
-            async with db.execute(query_offer, (offer_id,)) as o_cur:
-                o_res = await o_cur.fetchone()
-                
-        from constants import DIRECTION_TITLES
-        raw_dir = o_res[0] if o_res else "Неизвестно"
-        dir_text_title = DIRECTION_TITLES.get(raw_dir, raw_dir)
-        amount_val = o_res[1] if o_res else "Неизвестно"
-        
-        # Информируем Продавца о запуске проверки
+        # Просто меняем текст Продавцу, что проверка запущена
         await callback.message.edit_text(
             f"📥 **Заявка на верификацию депозита отправлена!**\n\n"
             f"Сделка #{deal_id} ожидает проверки Гарантом.\n"
-            f"Пожалуйста, приготовьте хэш транзакции или скриншот отправки крипты. Как только Гарант подтвердит баланс, сделка автоматически перейдет на этап оплаты.",
+            f"Пожалуйста, отправьте хэш транзакции или скриншот прямо сюда, в анонимный чат. Как только Гарант подтвердит баланс, он переведет сделку на этап оплаты.",
             parse_mode="Markdown"
         )
         
-        # Уведомляем Покупателя, что Продавец подал заявку на депозит
-        try:
-            await bot.send_message(
-                chat_id=buyer_id,
-                text=f"📥 **Продавец заявил о переводе депозита по сделке #{deal_id}!**\n\n"
-                     f"Ожидаем, пока официальный Гарант проверит и подтвердит поступление монет на безопасный кошелек платформы."
-            )
-        except Exception:
-            pass
+        # Автоматически пишем Гаранту в анонимный чат, что Продавец готов
+        from core import anonymous_chat_relay
+        # Имитируем системное сообщение в чат сделки
+        async with aiosqlite.connect(DB_NAME) as db:
+            async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as cur:
+                g_id = (await cur.fetchone())[0]
+                
+        if g_id:
+            try:
+                await bot.send_message(
+                    chat_id=g_id,
+                    text=f"🔔 **[СИСТЕМА]:** Продавец по сделке #{deal_id} нажал кнопку «Я перевел депозит». Проверьте баланс кошелька!"
+                )
+            except: pass
+        return
         
         # Кнопка для команды Гарантов
         kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
