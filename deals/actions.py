@@ -244,7 +244,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
             await db.commit()
             
-        import rating
+        from deals import rating
         # Высылаем клавиатуры геймификации и рейтинга из rating.py обоим участникам
         kb_rate_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text=f"⭐ {i}", callback_data=f"rate_user_{buyer_id}_{i}") for i in range(1, 6)],
