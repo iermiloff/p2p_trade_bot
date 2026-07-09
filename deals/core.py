@@ -79,7 +79,7 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
     await send_deal_interface_to_user(bot, buyer_id_final, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
     
     # --- ИСПРАВЛЕНО: ОТПРАВКА КРИТИЧЕСКОГО АЛЕРТА КОМАНДЕ ГАРАНТОВ ПРИ ОТКРЫТИИ СДЕЛКИ ---
-    from config import ADMIN_CHAT_ID, ADMIN_IDS
+    from config import ADMIN_CHAT_ID
     from constants import DIRECTION_TITLES
     
     # Формируем красивый текст направления для Гаранта
