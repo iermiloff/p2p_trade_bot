@@ -11,7 +11,6 @@ STATUS_NAMES = {
     "guarantor_member": "🔷 Гарант" 
 }
 
-# Четкие читаемые направления для пользователей и Гарантов
 DIRECTION_TITLES = {
     "crypto_bot": "Крипта (Bot) ⇄ Карты",
     "bybit": "Крипта (Bybit) ⇄ Карты",
