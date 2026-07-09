@@ -33,6 +33,15 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         
     creator_id, direction, offer_type, amount, rate = offer
     
+    # --- ИСПРАВЛЕНО: ЖЁСТКИЙ ЗАПРЕТ НА СДЕЛКИ С САМИМ СОБОЙ ---
+    if buyer_id == creator_id:
+        await callback.answer(
+            "🛑 Ошибка: Вы не можете начать обмен по собственному объявлению! "
+            "Дождитесь, пока ваш лот заберёт другой трейдер.", 
+            show_alert=True
+        )
+        return
+    
     # Определяем роли в будущей сделке
     # Если лот в стакане типа 'sell' (создатель продает крипту), то Покупатель — это тот, кто кликнул (buyer_id)
     if offer_type == "sell":
