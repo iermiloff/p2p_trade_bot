@@ -276,6 +276,6 @@ async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMC
     deal_id, status, buyer_id, seller_id, guarantor_id = active_deal
     
     # Передаем явный именованный параметр edit_message_obj=callback для пуленепробиваемой отрисовки без крашей
-    from actions import send_deal_interface_to_user
+    from deals.actions import send_deal_interface_to_user
     await send_deal_interface_to_user(bot, tg_id, deal_id, status, buyer_id, seller_id, guarantor_id, edit_message_obj=callback)
 
