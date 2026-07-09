@@ -68,15 +68,20 @@ async def process_direction_type_choice(callback: types.CallbackQuery):
     )
 @router.callback_query(F.data.startswith("view_offers_"))
 async def display_offers_list(callback: types.CallbackQuery):
-    """Вывод списка ордеров с поддержкой пагинации, сортировки (time/rate) и только через Гаранта"""
+    """Вывод списка ордеров с поддержкой динамического парсинга направлений любой длины"""
     await callback.answer()
     
     # Шаблон callback_data: view_offers_[direction]_[offer_type]_[page]_[sort_by]
     parts = callback.data.split("_")
-    direction = parts[2]
-    offer_type = parts[3]
-    page = int(parts[4])
-    sort_by = parts[5] # 'time' или 'rate'
+    
+    # Забираем параметры строго с конца списка, чтобы исключить баг с составными именами (crypto_bot)
+    sort_by = parts[-1]   # 'time' или 'rate' (всегда последний элемент)
+    page = int(parts[-2]) # Номер страницы (всегда предпоследний)
+    offer_type = parts[-3] # 'buy' или 'sell'
+    
+    # Собираем название направления из всех оставшихся элементов посередине
+    # Отрезаем первые два элемента ('view', 'offers') и последние три (type, page, sort)
+    direction = "_".join(parts[2:-3])
     
     limit = 5
     offset = (page - 1) * limit
