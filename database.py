@@ -120,15 +120,17 @@ async def has_required_requisites(tg_id: int, direction: str, offer_type: str) -
             return bool(fk and fk.strip())
             
         return False
-
+        
 async def is_user_guarantor(tg_id: int) -> bool:
-    """Проверяет права Гаранта"""
+    """Проверяет права Гаранта с корректной распаковкой кортежа"""
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT user_status FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
             res = await cursor.fetchone()
+        # ИСПРАВЛЕНО: Проверяем первый элемент кортежа res[0]
         if res and res[0] in ["guarantor_member", "guarantor"]:
             return True
         return False
+
 
 async def get_user_title(deals_count: int, rating: float) -> str:
     """Расчет титула пользователя"""
