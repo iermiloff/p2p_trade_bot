@@ -377,54 +377,62 @@ async def admin_restore_guarantor_panel(callback: types.CallbackQuery, state: FS
     user_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
-        # Ищем сделку, где текущий админ/гарант уже назначен модератором
+        # Ищем активную сделку, где текущий админ/гарант уже назначен модератором
+        # ИСПРАВЛЕНО: Добавлены новые асинхронные статусы 'waiting_deposit' и 'waiting_payment'
         query = """
             SELECT id, buyer_id, seller_id, status FROM deals 
-            WHERE guarantor_id = ? AND status IN ('waiting_payment', 'waiting_delivery', 'dispute')
+            WHERE guarantor_id = ? AND status IN ('waiting_deposit', 'waiting_payment', 'waiting_delivery', 'dispute')
             ORDER BY id DESC LIMIT 1
         """
         async with db.execute(query, (user_id,)) as cursor:
             active_deal = await cursor.fetchone()
             
     kb_back = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="back_to_admin")]
+        [types.InlineKeyboardButton(text=" Назад в админку", callback_data="back_to_admin")]
     ])
-            
+    
     if not active_deal:
-        await callback.message.edit_text("🛡️ **У вас нет активных сделок на модерации.**\nВы не привязаны ни к одному текущему обмену в качестве Гаранта.", reply_markup=kb_back)
+        await callback.message.edit_text(" **У вас нет активных сделок на модерации.**\nВы не привязаны ни к одному текущему обмену в качестве Гаранта.", reply_markup=kb_back)
         return
         
     deal_id, buyer_id, seller_id, status = active_deal
     
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", (buyer_id,)) as b_cur:
+        # ИСПРАВЛЕНО: Запрос к новым полям реквизитов (card, fkwallet, crypto_address) взамен удаленного piastrix
+        req_query = "SELECT card, fkwallet, crypto_address FROM requisites WHERE tg_id = ?"
+        async with db.execute(req_query, (buyer_id,)) as b_cur:
             b_req = await b_cur.fetchone()
-        async with db.execute("SELECT card, piastrix, ton FROM requisites WHERE tg_id = ?", (seller_id,)) as s_cur:
+        async with db.execute(req_query, (seller_id,)) as s_cur:
             s_req = await s_cur.fetchone()
             
-    b_card, b_pias, b_ton = b_req if b_req else ("не указано", "не указано", "не указано")
-    s_card, s_pias, s_ton = s_req if s_req else ("не указано", "не указано", "не gracious")
+    b_card, b_fk, b_crypto = b_req if b_req else ("не указано", "не указано", "не указано")
+    s_card, s_fk, s_crypto = s_req if s_req else ("не указано", "не указано", "не указано")
     
+    # Кнопки пульта управления для Гаранта
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🎉 Закрыть (Выпустить средства)", callback_data=f"guarantor_complete_{deal_id}")],
-        [types.InlineKeyboardButton(text="❌ Отменить (Вернуть средства)", callback_data=f"guarantor_cancel_{deal_id}")],
-        [types.InlineKeyboardButton(text="⬅️ Вернуться в админку", callback_data="back_to_admin")]
+        [types.InlineKeyboardButton(text=" Закрыть спор (Выпустить крипту)", callback_data=f"guarantor_complete_{deal_id}")],
+        [types.InlineKeyboardButton(text="❌ Отменить сделку (Вернуть крипту)", callback_data=f"guarantor_cancel_{deal_id}")],
+        [types.InlineKeyboardButton(text=" Вернуться в админку", callback_data="back_to_admin")]
     ])
     
+    # ИСПРАВЛЕНО: Безопасные асинхронные метки статусов без фиатного баланса Гаранта
     status_labels = {
-        'waiting_payment': 'Ожидание фиата от Покупателя',
-        'waiting_delivery': 'Фиат депонирован Гарантом / Ожидание выдачи монет',
-        'dispute': 'Открыт официальный спор (Арбитраж)'
+        'waiting_deposit': 'Ожидание крипто-депозита от Продавца',
+        'waiting_payment': 'Крипта заморожена / Ожидание перевода фиата Покупателем на карту',
+        'waiting_delivery': 'Покупатель заявил об оплате / Ожидание проверки Продавцом',
+        'dispute': 'Открыт официальный спор (Арбитраж Гаранта)'
     }
     
     await callback.message.edit_text(
-        f"🛡️ **Восстановление пульта Гаранта для сделки #{deal_id}!**\n\n"
-        f"📊 Текущий статус: _{status_labels.get(status, status)}_\n\n"
-        f"📋 **ДАННЫЕ ДЛЯ ПРОВЕРКИ ЧЕКОВ:**\n"
-        f"👤 **Покупатель (ID: `{buyer_id}`):**\n• Карты: `{b_card}` | • Piastrix: `{b_pias}` | • TON: `{b_ton}`\n\n"
-        f"👤 **Продавец (ID: `{seller_id}`):**\n• Карты: `{s_card}` | • Piastrix: `{s_pias}` | • TON: `{s_ton}`\n\n"
-        f"Используйте кнопки пульта ниже для принудительного закрытия или отмены транзакции:",
+        f" **Восстановление пульта Гаранта для сделки #{deal_id}!**\n\n"
+        f" Текущий статус: _{status_labels.get(status, status)}_\n\n"
+        f" **ДАННЫЕ ДЛЯ ПРОВЕРКИ ЧЕКОВ И ТРАНЗАКЦИЙ:**\n\n"
+        f" **Покупатель крипты (ID: `{buyer_id}`):**\n"
+        f"• Адрес получения монет: `{b_crypto}`\n"
+        f"• Кошелек FkWallet: `{b_fk}`\n\n"
+        f" **Продавец крипты (ID: `{seller_id}`):**\n"
+        f"• Карта получения фиата: `{s_card}`\n\n"
+        f"Используйте кнопки пульта ниже для принудительного закрытия сделки или возврата крипто-депозита Продавцу:",
         reply_markup=kb_admin_control,
         parse_mode="Markdown"
     )
-
