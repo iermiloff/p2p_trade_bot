@@ -40,17 +40,16 @@ dp = Dispatcher()
 dp.message.middleware(PlatformSecurityMiddleware())
 dp.callback_query.middleware(PlatformSecurityMiddleware())
 
-# --- ХЭНДЛЕР СТАРТА С КОНТРОЛЕМ АКТИВНЫХ СДЕЛОК ---
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    """Точка старта бота с перехватом и принудительным возвратом в интерфейс активной сделки"""
+    """Точка старта бота с перехватом и жестким разделением ролей Админ/Юзер"""
     await state.clear()
     tg_id = message.from_user.id
     
     import aiosqlite
     from database import DB_NAME
     
-    # Проверяем, есть ли у пользователя незавершенная сделка на любом асинхронном этапе
+    # 1. Проверяем активные сделки
     async with aiosqlite.connect(DB_NAME) as db:
         query = """
             SELECT id, status, buyer_id, seller_id, guarantor_id 
@@ -62,25 +61,31 @@ async def cmd_start(message: types.Message, state: FSMContext):
         async with db.execute(query, (tg_id, tg_id, tg_id)) as cursor:
             active_deal = await cursor.fetchone()
             
-    # Если найдена активная сделка — жестко блокируем меню и перерисовываем интерфейс шага
     if active_deal:
         deal_id, status, buyer_id, seller_id, guarantor_id = active_deal
-        
-        # Вызываем централизованный рендеринг кнопок из actions.py
         from actions import send_deal_interface_to_user
         await send_deal_interface_to_user(bot, tg_id, deal_id, status, buyer_id, seller_id, guarantor_id, message)
         return
 
-    # Если активных сделок нет — открываем стандартное Главное Меню P2P
+    # 2. ИСПРАВЛЕНО: Если это Администратор — принудительно перенаправляем в админку!
+    if tg_id in ADMIN_IDS:
+        import admin
+        await message.answer(
+            "🛠 **Панель управления Администратора P2P**\n\nВыберите необходимый раздел для модерации платформы:",
+            reply_markup=admin.get_admin_keyboard()
+        )
+        return
+
+    # 3. Если обычный пользователь — отдаем стандартный P2P-интерфейс
     import cabinet
     await message.answer(
         "👋 **Добро пожаловать на P2P Торговую Платформу!**\n\n"
-        "Здесь вы можете безопасно обменивать активы напрямую с другими пользователями.\n"
-        "🛡 Все операции проходят **строго через асинхронного Гаранта** системы для исключения мошенничества и блокировок по 115-ФЗ.\n\n"
+        "🛡 Все операции проходят строго через асинхронного Гаранта системы.\n\n"
         "Используйте интерактивное меню ниже для работы:",
         reply_markup=cabinet.get_main_keyboard(),
         parse_mode="Markdown"
     )
+
 
 # --- ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ВСЕЙ СИСТЕМЫ ---
 async def main():
