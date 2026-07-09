@@ -27,14 +27,17 @@ async def init_db():
             rating_count INTEGER DEFAULT 1
         )''')
         
-        # Обновленная таблица реквизитов (Карты, TON/Адреса, FkWallet)
-        await db.execute('''
-        CREATE TABLE IF NOT EXISTS requisites (
-            tg_id INTEGER PRIMARY KEY,
-            card TEXT DEFAULT '',
-            fkwallet TEXT DEFAULT '',
-            crypto_address TEXT DEFAULT '' -- Универсальное поле для Bot/Bybit/Other адресов вывода
-        )''')
+# Таблица реквизитов (Полное соответствие ТЗ)
+await db.execute('''
+CREATE TABLE IF NOT EXISTS requisites (
+    tg_id INTEGER PRIMARY KEY,
+    card TEXT DEFAULT '',           -- Куда Продавец получает рубли (нужно для всех 4-х направлений)
+    crypto_bot TEXT DEFAULT '',     -- Реквизиты для получения крипты на Crypto Bot
+    bybit TEXT DEFAULT '',          -- Реквизиты/Адрес для получения крипты на Bybit
+    other_wallets TEXT DEFAULT '',  -- Реквизиты/Адрес для сторонних кошельков
+    fkwallet TEXT DEFAULT ''        -- Номер кошелька FkWallet
+)''')
+
         
         # Таблица объявлений в стакане
         # direction может быть: 'crypto_bot', 'bybit', 'other_wallets', 'fkwallet' (все к Картам)
