@@ -106,17 +106,18 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         except Exception as e:
             print(f"[ОШИБКА ОТПРАВКИ В ЧАТ АДМИНОВ]: {e}")
     else:
-        # ИСПРАВЛЕНО: Если чата нет, собираем админов И живых Гарантов комьюнити из базы для рассылки в ЛС
+        # ИСПРАВЛЕНО: Безопасный сбор админов И живых Гарантов комьюнити из базы данных
         all_guarantor_ids = list(ADMIN_IDS)
         try:
             async with aiosqlite.connect(DB_NAME) as db:
                 # Тянем из БД всех пользователей со статусом Гаранта
                 async with db.execute("SELECT tg_id FROM users WHERE user_status IN ('guarantor_member', 'guarantor')") as g_cursor:
                     rows = await g_cursor.fetchall()
-        for row in rows:
-            g_uid = row[0] 
-            if g_uid not in all_guarantor_ids:
-                all_guarantor_ids.append(g_uid)
+                    # Цикл находится строго внутри контекстного менеджера СУБД!
+                    for row in rows:
+                        g_uid = row[0] # Исправлено: Достаем чистое число из кортежа
+                        if g_uid not in all_guarantor_ids:
+                            all_guarantor_ids.append(g_uid)
         except Exception as db_err:
             print(f"[ОШИБКА СБОРА ГАРАНТОВ КОМЬЮНИТИ]: {db_err}")
             
@@ -126,7 +127,6 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
                 await bot.send_message(chat_id=receiver_id, text=alert_g_text, reply_markup=kb_admin, parse_mode="Markdown")
             except Exception:
                 continue
-
 
     # Стираем стакан у того, кто нажал кнопку, для обновления экрана
     try:
