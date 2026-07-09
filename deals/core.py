@@ -80,7 +80,6 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
     
     # --- ИСПРАВЛЕНО: ОТПРАВКА КРИТИЧЕСКОГО АЛЕРТА КОМАНДЕ ГАРАНТОВ ПРИ ОТКРЫТИИ СДЕЛКИ ---
     from config import ADMIN_CHAT_ID
-    from constants import DIRECTION_TITLES
     
     # Формируем красивый текст направления для Гаранта
     dir_text_title = DIRECTION_TITLES.get(direction, direction)
