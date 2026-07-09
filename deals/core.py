@@ -113,10 +113,10 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
                 # Тянем из БД всех пользователей со статусом Гаранта
                 async with db.execute("SELECT tg_id FROM users WHERE user_status IN ('guarantor_member', 'guarantor')") as g_cursor:
                     rows = await g_cursor.fetchall()
-                    for row in rows:
-                        g_uid = row[0]
-                        if g_uid not in all_guarantor_ids:
-                            all_guarantor_ids.append(g_uid)
+        for row in rows:
+            g_uid = row[0] 
+            if g_uid not in all_guarantor_ids:
+                all_guarantor_ids.append(g_uid)
         except Exception as db_err:
             print(f"[ОШИБКА СБОРА ГАРАНТОВ КОМЬЮНИТИ]: {db_err}")
             
