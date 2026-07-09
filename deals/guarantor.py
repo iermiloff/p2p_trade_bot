@@ -103,7 +103,7 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     )
     
     # Оповещаем участников об успешном подключении модератора и обновляем им интерфейсы шага 'waiting_payment'
-    from actions import send_deal_interface_to_user
+    from deals.actions import send_deal_interface_to_user
     await send_deal_interface_to_user(bot, buyer_id, deal_id, "waiting_payment", buyer_id, seller_id, user_id)
     await send_deal_interface_to_user(bot, seller_id, deal_id, "waiting_payment", buyer_id, seller_id, user_id)
 
