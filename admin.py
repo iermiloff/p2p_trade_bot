@@ -1,5 +1,6 @@
 import aiosqlite
 import time
+import math
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command
 from aiogram.fsm.state import State, StatesGroup
@@ -19,10 +20,10 @@ class AdminManageStates(StatesGroup):
 def get_admin_keyboard():
     """Главная клавиатура админ-панели"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="📈 Общая статистика", callback_data="admin_stats")],
-        [types.InlineKeyboardButton(text="📋 Заявки на верификацию", callback_data="admin_view_kyc")],
+        [types.InlineKeyboardButton(text="📊 Общая статистика", callback_data="admin_stats")],
+        [types.InlineKeyboardButton(text="📝 Заявки на верификацию", callback_data="admin_view_kyc")],
         [types.InlineKeyboardButton(text="⚙️ Управление по ID", callback_data="admin_manage_user_start")],
-        [types.InlineKeyboardButton(text="🛡️ Мои сделки (Гарант)", callback_data="admin_active_guarantor_deals")], # ⚡ ДОБАВИЛИ КНОПКУ СЮДА
+        [types.InlineKeyboardButton(text="🔷 Мои сделки (Гарант)", callback_data="admin_active_guarantor_deals")],
         [types.InlineKeyboardButton(text="👥 Список пользователей", callback_data="admin_view_users")],
         [types.InlineKeyboardButton(text="🚫 Список забаненных", callback_data="admin_view_banned")]
     ])
@@ -30,6 +31,9 @@ def get_admin_keyboard():
 @router.message(Command("admin"), F.chat.type == "private")
 async def cmd_admin_panel(message: types.Message, state: FSMContext):
     """Вход в админку по команде /admin с авто-очисткой зависших стейтов"""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
     await state.clear()
     await message.answer("🛠 **Панель управления Администратора P2P**", reply_markup=get_admin_keyboard())
 
@@ -42,31 +46,30 @@ async def back_to_admin_callback(callback: types.CallbackQuery, state: FSMContex
         "🛠 **Панель управления Администратора P2P**\n\nВыберите необходимый раздел для модерации платформы:", 
         reply_markup=get_admin_keyboard()
     )
+
 # --- 1. ОБЩАЯ СТАТИСТИКА ПЛАТФОРМЫ ---
 @router.callback_query(F.data == "admin_stats")
 async def admin_show_stats(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
-    await state.clear()  # Сбрасываем стейты, если админ ушел из режима ввода ID
+    await state.clear()
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT COUNT(*) FROM users") as c: total_users = (await c.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM users WHERE is_verified = 1") as c: verified_users = (await c.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM offers WHERE status = 'active'") as c: active_offers = (await c.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM deals WHERE status = 'completed'") as c: completed_deals = (await c.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM deals WHERE status = 'dispute'") as c: active_disputes = (await c.fetchone())[0]
-
+        
     text = (
-        f"📈 **Общая статистика p2p-платформы:**\n\n"
-        f"👥 Всего пользователей: **{total_users}**\n"
-        f"✅ Верифицировано: **{verified_users}**\n"
-        f"📊 Активных ордеров: **{active_offers}**\n"
-        f"🎉 Успешных обменов: **{completed_deals}**\n"
-        f"🚨 Текущих диспутов: **{active_disputes}**"
+        f"📊 **Общая статистика p2p-платформы:**\n\n"
+        f"• Всего пользователей: **{total_users}**\n"
+        f"• ✅ Верифицировано: **{verified_users}**\n"
+        f"• 🛒 Активных ордеров: **{active_offers}**\n"
+        f"• 🎉 Успешных обменов: **{completed_deals}**\n"
+        f"• 🚨 Текущих диспутов: **{active_disputes}**"
     )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_admin")]])
     await callback.message.edit_text(text, reply_markup=kb)
-
-
-# --- 2. ПРОСМОТР ЗАЯВОК НА ВЕРИФИКАЦИЮ (С СЫЛКАМИ И АВТОНОМНЫМ ПРОСМОТРОМ) ---
+# --- 2. ПРОСМОТР ЗАЯВОК НА ВЕРИФИКАЦИЮ ---
 @router.callback_query(F.data == "admin_view_kyc")
 async def admin_view_kyc_list(callback: types.CallbackQuery, bot: Bot, state: FSMContext):
     await callback.answer()
@@ -74,39 +77,37 @@ async def admin_view_kyc_list(callback: types.CallbackQuery, bot: Bot, state: FS
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT tg_id, nickname, kyc_file_id FROM users WHERE is_verified = 0 LIMIT 5") as cursor:
             unverified = await cursor.fetchall()
-            
+ 
     if not unverified:
-        kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_admin")]])
-        await callback.message.edit_text("📋 Нет новых заявок на верификацию.", reply_markup=kb)
+        kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Назад", callback_data="back_to_admin")]])
+        await callback.message.edit_text(" Нет новых заявок на верификацию.", reply_markup=kb)
         return
-        
+ 
     await callback.message.edit_text(
-        "📋 **Пользователи, ожидающие верификацию:**", 
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="back_to_admin")]])
+        " **Пользователи, ожидающие верификацию:**", 
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Назад в админку", callback_data="back_to_admin")]])
     )
-    
+ 
     for tg_id, nickname, kyc_file_id in unverified:
         inline_buttons = [
-            types.InlineKeyboardButton(text="👍 Одобрить", callback_data=f"verify_approve_{tg_id}"),
-            types.InlineKeyboardButton(text="👎 Отклонить", callback_data=f"verify_decline_{tg_id}")
+            types.InlineKeyboardButton(text=" Одобрить", callback_data=f"verify_approve_{tg_id}"),
+            types.InlineKeyboardButton(text=" Отклонить", callback_data=f"verify_decline_{tg_id}")
         ]
         kb_list = [inline_buttons]
-        
-        # Если в базе сохранен файл документа, добавляем кнопку его просмотра для нового админа
+ 
         if kyc_file_id:
-            kb_list.insert(0, [types.InlineKeyboardButton(text="🖼 Посмотреть документ/скан", callback_data=f"admin_show_doc_{tg_id}")])
-            
+            kb_list.insert(0, [types.InlineKeyboardButton(text=" Посмотреть документ/скан", callback_data=f"admin_show_doc_{tg_id}")])
+ 
         kb_manage = types.InlineKeyboardMarkup(inline_keyboard=kb_list)
         user_link = f"[{nickname}](tg://user?id={tg_id})"
         await callback.message.answer(
-            f"👤 **Анонимный ник:** {nickname}\n"
-            f"🔗 **Реальный профиль:** {user_link}\n"
-            f"🆔 Telegram ID: `{tg_id}`", 
+            f" **Анонимный ник:** {nickname}\n"
+            f" **Реальный профиль:** {user_link}\n"
+            f" Telegram ID: `{tg_id}`", 
             reply_markup=kb_manage, 
             parse_mode="Markdown"
         )
 
-# Хэндлер показа скана документа из базы данных по запросу любого админа
 @router.callback_query(F.data.startswith("admin_show_doc_"))
 async def admin_show_stored_document(callback: types.CallbackQuery, bot: Bot):
     await callback.answer()
@@ -115,104 +116,72 @@ async def admin_show_stored_document(callback: types.CallbackQuery, bot: Bot):
         async with db.execute("SELECT kyc_file_id FROM users WHERE tg_id = ?", (target_id,)) as cursor:
             res = await cursor.fetchone()
     if res and res[0]:
-        await bot.send_photo(chat_id=callback.from_user.id, photo=res[0], caption=f"📄 Документ верификации пользователя `{target_id}` поднят из БД.")
+        await bot.send_photo(chat_id=callback.from_user.id, photo=res[0], caption=f" Документ верификации пользователя `{target_id}` поднят из БД.")
     else:
-        await callback.message.answer("⚠️ Документ не найден в базе данных.")
+        await callback.message.answer(" Документ не найден в базе данных.")
 
 # --- 3. ПОСТРАНИЧНЫЙ СПИСОК ПОЛЬЗОВАТЕЛЕЙ (ПАГИНАЦИЯ) ---
 @router.callback_query(F.data.startswith("admin_view_users"))
 async def admin_view_users_list(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
-    
-    # Извлекаем номер страницы из callback_data (формат: admin_view_users_page_[номер])
+ 
     parts = callback.data.split("_")
     page = int(parts[-1]) if len(parts) > 3 and parts[-1].isdigit() else 1
-    
-    limit = 5  # Выводим строго по 5 пользователей на сообщение, чтобы не спамить
+ 
+    limit = 5 
     offset = (page - 1) * limit
-    
+ 
     async with aiosqlite.connect(DB_NAME) as db:
-        # Считаем общее количество пользователей для вычисления страниц
         async with db.execute("SELECT COUNT(*) FROM users") as c:
             total_users = (await c.fetchone())[0]
-            
-        # Вытягиваем порцию пользователей строго для текущей страницы
+ 
         query = "SELECT tg_id, nickname, user_status, rating, deals_count, is_verified FROM users LIMIT ? OFFSET ?"
         async with db.execute(query, (limit, offset)) as cursor:
             users = await cursor.fetchall()
-            
-    # Вычисляем максимальное количество страниц
-    import math
+ 
     max_pages = math.ceil(total_users / limit) if total_users > 0 else 1
-    
-    text = f"👥 **Список пользователей системы (Страница {page}/{max_pages}):**\n\n"
-    
-    # Собираем инлайн-кнопки для каждого пользователя на этой странице
+    text = f" **Список пользователей системы (Страница {page}/{max_pages}):**\n\n"
     inline_keyboard = []
-    
+ 
     for tg_id, nick, status, rating, deals, is_verified in users:
-        kyc_badge = "🟢 Доступ" if is_verified == 1 else "⏳ Ожидает"
-        status_name = STATUS_NAMES.get(status, "❌ Закрыт") if is_verified == 1 else "❌ Закрыт"
-        
-        # Отрезаем хэштег из ника для красоты на кнопке, если нужно
-        text += f"• **{nick}** | ID: `{tg_id}`\n  └ KYC: {kyc_badge} | {status_name} | ⭐ {rating:.1f} | 🤝 {deals}\n\n"
-        
-        # Добавляем персональную кнопку управления в один ряд с ником
+        kyc_badge = " Доступ" if is_verified == 1 else " Ожидает"
+        status_name = STATUS_NAMES.get(status, " Закрыт") if is_verified == 1 else " Закрыт"
+        text += f"• **{nick}** | ID: `{tg_id}`\n └ KYC: {kyc_badge} | {status_name} | ⭐{rating:.1f} | {deals}\n\n"
+ 
         inline_keyboard.append([
-            types.InlineKeyboardButton(text=f"⚙️ Управлять {nick.split(' #')[0]}", callback_data=f"usrmng_panel_{tg_id}")
+            types.InlineKeyboardButton(text=f" Управлять {nick.split(' #')[0]}", callback_data=f"usrmng_panel_{tg_id}")
         ])
-        
-    # Генерируем стрелочки навигации под списком
+ 
     navigation_row = []
     if page > 1:
-        navigation_row.append(types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin_view_users_page_{page - 1}"))
-    
-    navigation_row.append(types.InlineKeyboardButton(text=f"📄 {page} / {max_pages}", callback_data="dummy_page"))
-    
+        navigation_row.append(types.InlineKeyboardButton(text=" Назад", callback_data=f"admin_view_users_page_{page - 1}"))
+    navigation_row.append(types.InlineKeyboardButton(text=f" {page} / {max_pages}", callback_data="dummy_page"))
     if page < max_pages:
-        navigation_row.append(types.InlineKeyboardButton(text="Вперед ➡️", callback_data=f"admin_view_users_page_{page + 1}"))
-        
+        navigation_row.append(types.InlineKeyboardButton(text="Вперед ", callback_data=f"admin_view_users_page_{page + 1}"))
+ 
     inline_keyboard.append(navigation_row)
-    inline_keyboard.append([types.InlineKeyboardButton(text="⬅️ Главное меню админки", callback_data="back_to_admin")])
-    
-    kb_pagination = types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-    
-    # ⚡ ВАЖНО: Мы РЕДАКТИРУЕМ текущее сообщение, а не шлем новые! Нет флуда.
+    inline_keyboard.append([types.InlineKeyboardButton(text=" Главное меню админки", callback_data="back_to_admin")])
+ 
     try:
-        await callback.message.edit_text(text, reply_markup=kb_pagination, parse_mode="Markdown")
+        await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=inline_keyboard), parse_mode="Markdown")
     except Exception:
-        # На случай, если админ нажал ту же страницу и текст не поменялся
         pass
-        
-        # ГЕНЕРИРУЕМ КНОПКУ ПРЯМОГО ВХОДА В КАРТОЧКУ УПРАВЛЕНИЯ ЭТИМ ЮЗЕРОМ
-        kb_user_control = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="⚙️ Открыть пульт модерации", callback_data=f"usrmng_panel_{tg_id}")]
-        ])
-        
-        await callback.message.answer(
-            f"• Профиль: {real_profile_link} | ID: `{tg_id}`\n"
-            f"  └ Проверка KYC: **{kyc_badge}**\n"
-            f"  └ Ранг: {status_name} | ⭐ {rating:.1f} | 🤝 Сделок: {deals}",
-            reply_markup=kb_user_control,
-            parse_mode="Markdown"
-        )
-
 # --- 5. МОДУЛЬ РУЧНОГО УПРАВЛЕНИЯ ПО ID И ОБРАБОТКА ПУЛЬТА МОДЕРАЦИИ ---
 @router.callback_query(F.data == "admin_manage_user_start")
 async def admin_manage_user_init(callback: types.CallbackQuery, state: FSMContext):
     """Инициализация ручного ввода ID пользователя"""
     await callback.answer()
     await state.set_state(AdminManageStates.waiting_for_user_id)
-    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_to_admin")]])
-    await callback.message.edit_text("⚙️ **Управление по ID**\n\nПришлите в ответном сообщении численный **Telegram ID** пользователя:", reply_markup=kb)
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Отмена", callback_data="back_to_admin")]])
+    await callback.message.edit_text(" **Управление по ID**\n\nПришлите численный **Telegram ID** пользователя:", reply_markup=kb)
 
 @router.message(StateFilter(AdminManageStates.waiting_for_user_id), F.text)
 async def admin_handle_id_text(message: types.Message, state: FSMContext):
     """Получение ID текстом и вызов пульта"""
     user_text = message.text.strip()
     if not user_text.isdigit():
-        await message.answer("⚠️ Ошибка: ID должен состоять только из цифр. Попробуйте еще раз:")
+        await message.answer(" Ошибка: ID должен состоять только из цифр. Попробуйте еще раз:")
         return
     await state.clear()
     await render_control_panel(message, int(user_text))
@@ -222,46 +191,45 @@ async def render_control_panel(message_obj: types.Message, target_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT nickname, user_status, rating, deals_count, is_banned, ban_until FROM users WHERE tg_id = ?", (target_id,)) as cursor:
             user_data = await cursor.fetchone()
-            
+ 
     if not user_data:
         if isinstance(message_obj, types.Message):
             await message_obj.answer("❌ Пользователь с таким ID не найден в базе данных.")
         elif isinstance(message_obj, types.CallbackQuery):
             await message_obj.answer("❌ Данные пользователя не найдены.", show_alert=True)
         return
-        
+ 
     nick, status, rating, deals, is_banned, ban_until = user_data
     status_text = STATUS_NAMES.get(status, status)
-    
     current_time = int(time.time())
-    if is_banned == 1: 
-        ban_status = "举️ Вечный бан"
-    elif ban_until > current_time: 
-        ban_status = f"⏳ Временный бан до {time.strftime('%d.%m %H:%M', time.localtime(ban_until))}"
-    else: 
-        ban_status = "🟢 Чист / Активен"
     
+    if is_banned == 1: 
+        ban_status = " Вечный бан"
+    elif ban_until > current_time: 
+        ban_status = f" Временный бан до {time.strftime('%d.%m %H:%M', time.localtime(ban_until))}"
+    else: 
+        ban_status = " Чист / Активен"
+ 
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
         [
-            types.InlineKeyboardButton(text="⛔ Пермбан", callback_data=f"usrmng_permban_{target_id}"),
-            types.InlineKeyboardButton(text="⏳ Темпбан", callback_data=f"usrmng_tempban_{target_id}"),
+            types.InlineKeyboardButton(text=" Пермбан", callback_data=f"usrmng_permban_{target_id}"),
+            types.InlineKeyboardButton(text=" Темпбан", callback_data=f"usrmng_tempban_{target_id}"),
             types.InlineKeyboardButton(text="✅ Разбанить", callback_data=f"usrmng_unban_{target_id}")
         ],
-        [types.InlineKeyboardButton(text="🎖 Изменить Ранг / Роль", callback_data=f"usrmng_setrole_{target_id}")],
-        [types.InlineKeyboardButton(text="⬅️ В главное меню админки", callback_data="back_to_admin")]
+        [types.InlineKeyboardButton(text=" Изменить Ранг / Роль", callback_data=f"usrmng_setrole_{target_id}")],
+        [types.InlineKeyboardButton(text=" В главное меню админки", callback_data="back_to_admin")]
     ])
-    
+ 
     real_profile_link = f"[{nick}](tg://user?id={target_id})"
     text = (
-        f"👤 **ПУЛЬТ МОДЕРАЦИИ ПОЛЬЗОВАТЕЛЯ:**\n\n"
+        f" **ПУЛЬТ МОДЕРАЦИИ ПОЛЬЗОВАТЕЛЯ:**\n\n"
         f"• Профиль: {real_profile_link}\n"
         f"• ID: `{target_id}`\n"
         f"• Текущий ранг: **{status_text}**\n"
-        f"• Репутация: ⭐ {rating:.1f} | 🤝 Сделок: {deals}\n"
-        f"• Статус ограничений: **{ban_status}**\n\n"
+        f"• Репутация: ⭐{rating:.1f} | Сделок: {deals}\n"
+        f"• Статус ограничения: **{ban_status}**\n\n"
         f"Выберите необходимое действие:"
     )
-    
     if isinstance(message_obj, types.CallbackQuery):
         await message_obj.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     else:
@@ -272,19 +240,18 @@ async def admin_process_user_moderation_buttons(callback: types.CallbackQuery, s
     """Обработчик всех кнопок пульта модерации"""
     await callback.answer()
     parts = callback.data.split("_")
-    action = parts[1] # 'panel', 'permban', 'tempban', 'unban', 'setrole', 'saverole'
+    action = parts[1]
     target_id = int(parts[2])
-    
-    # Если кликнули «Открыть пульт» из интерактивного списка
+ 
     if action == "panel":
         await render_control_panel(callback, target_id)
         return
-    
+ 
     async with aiosqlite.connect(DB_NAME) as db:
         if action == "permban":
             await db.execute("UPDATE users SET is_banned = 1 WHERE tg_id = ?", (target_id,))
             await db.commit()
-            await callback.message.answer(f"⛔ Пользователь `{target_id}` заблокирован НАВСЕГДА.")
+            await callback.message.answer(f" Пользователь `{target_id}` заблокирован НАВСЕГДА.")
         elif action == "unban":
             await db.execute("UPDATE users SET is_banned = 0, ban_until = 0 WHERE tg_id = ?", (target_id,))
             await db.commit()
@@ -292,26 +259,25 @@ async def admin_process_user_moderation_buttons(callback: types.CallbackQuery, s
         elif action == "tempban":
             await state.set_state(AdminManageStates.waiting_for_ban_time)
             await state.update_data(target_id=target_id)
-            await callback.message.answer("⏳ **Ввод времени бана:**\nПришлите количество минут, на которое нужно заблокировать пользователя:")
+            await callback.message.answer(" **Ввод времени бана:**\nПришлите количество минут, на которое нужно заблокировать пользователя:")
             return
         elif action == "setrole":
             kb_roles = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🟢 Верифицированный", callback_data=f"usrmng_saverole_{target_id}_verified")],
-                [types.InlineKeyboardButton(text="🔥 Трейдер", callback_data=f"usrmng_saverole_{target_id}_trader")],
-                [types.InlineKeyboardButton(text="⚡... Трейдер", callback_data=f"usrmng_saverole_{target_id}_super_trader")],
-                [types.InlineKeyboardButton(text="🛡️ Гарант Комьюнити", callback_data=f"usrmng_saverole_{target_id}_guarantor_member")],
+                [types.InlineKeyboardButton(text=" Верифицированный", callback_data=f"usrmng_saverole_{target_id}_verified")],
+                [types.InlineKeyboardButton(text=" Трейдер", callback_data=f"usrmng_saverole_{target_id}_trader")],
+                [types.InlineKeyboardButton(text=" Супер Трейдер", callback_data=f"usrmng_saverole_{target_id}_super_trader")],
+                [types.InlineKeyboardButton(text=" Гарант Комьюнити", callback_data=f"usrmng_saverole_{target_id}_guarantor_member")],
                 [types.InlineKeyboardButton(text="⬅ Назад", callback_data="back_to_admin")]
             ])
-            await callback.message.edit_text(f"🎖 **Выбор нового ранга для пользователя {target_id}:**", reply_markup=kb_roles)
+            await callback.message.edit_text(f" **Выбор нового ранга для пользователя {target_id}:**", reply_markup=kb_roles)
             return
         elif action == "saverole":
             new_role = parts[3]
             await db.execute("UPDATE users SET user_status = ? WHERE tg_id = ?", (new_role, target_id))
             await db.commit()
             role_title = STATUS_NAMES.get(new_role, new_role)
-            await callback.message.edit_text(f"🎉 Ранг пользователя `{target_id}` успешно изменен на: **{role_title}**.")
-            try: 
-                await bot.send_message(chat_id=target_id, text=f"🔔 Ваш статус обновлен! Новый ранг: **{role_title}**.")
+            await callback.message.edit_text(f" Ранг пользователя `{target_id}` успешно изменен на: **{role_title}**.")
+            try: await bot.send_message(chat_id=target_id, text=f" Ваш статус обновлен! Новый ранг: **{role_title}**.")
             except: pass
 
 @router.message(StateFilter(AdminManageStates.waiting_for_ban_time), F.text)
@@ -319,19 +285,18 @@ async def admin_save_tempban_time(message: types.Message, state: FSMContext):
     """Сохранение времени временного бана"""
     text = message.text.strip()
     if not text.isdigit():
-        await message.answer("⚠️ Ошибка: Введите число минут цифрами:")
+        await message.answer(" Ошибка: Введите число минут цифрами:")
         return
     minutes = int(text)
     data = await state.get_data()
     target_id = data["target_id"]
     await state.clear()
-    
+ 
     ban_timestamp = int(time.time()) + (minutes * 60)
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE users SET ban_until = ? WHERE tg_id = ?", (ban_timestamp, target_id))
         await db.commit()
-    await message.answer(f"⏳ Пользователь `{target_id}` успешно заблокирован на **{minutes}** минут.")
-
+    await message.answer(f" Пользователь `{target_id}` успешно заблокирован на **{minutes}** минут.")
 # --- 4. СПИСОК ЗАБАНЕННЫХ ПОЛЬЗОВАТЕЛЕЙ ---
 @router.callback_query(F.data == "admin_view_banned")
 async def admin_view_banned_list(callback: types.CallbackQuery, state: FSMContext):
@@ -340,44 +305,26 @@ async def admin_view_banned_list(callback: types.CallbackQuery, state: FSMContex
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT tg_id, nickname, is_banned, ban_until FROM users WHERE is_banned = 1 OR ban_until > 0") as cursor:
             banned = await cursor.fetchall()
-            
+ 
     if not banned:
-        await callback.message.edit_text(
-            "🚫 Список заблокированных пользователей пуст.", 
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_admin")]])
-        )
+        await callback.message.edit_text(" Список заблокированных пользователей пуст.", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Назад", callback_data="back_to_admin")]]))
         return
-        
-    await callback.message.edit_text(
-        "🚫 **Заблокированные пользователи:**", 
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="back_to_admin")]])
-    )
-    
+ 
+    await callback.message.edit_text(" **Заблокированные пользователи:**", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Назад в админку", callback_data="back_to_admin")]]))
     for tg_id, nick, is_perm, until in banned:
-        ban_type = "Вечный бан ⛔" if is_perm == 1 else f"Временный бан до (Unix): `{until}` ⏳"
+        ban_type = "Вечный бан " if is_perm == 1 else f"Временный бан до (Unix): `{until}` "
         real_profile_link = f"[{nick}](tg://user?id={tg_id})"
-        
-        # Кнопка быстрого перехода в пульт, чтобы разбанить или перенастроить
-        kb_user_control = types.InlineKeyboardMarkup(inline_keyboard=[
-            [types.InlineKeyboardButton(text="⚙️ Открыть пульт модерации", callback_data=f"usrmng_panel_{tg_id}")]
-        ])
-        
-        await callback.message.answer(
-            f"• Профиль: {real_profile_link} (ID: `{tg_id}`)\n"
-            f"  └ Тип: {ban_type}", 
-            reply_markup=kb_user_control, 
-            parse_mode="Markdown"
-        )
+        kb_user_control = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Открыть пульт модерации", callback_data=f"usrmng_panel_{tg_id}")]])
+        await callback.message.answer(f"• Профиль: {real_profile_link} (ID: `{tg_id}`)\n └ Тип: {ban_type}", reply_markup=kb_user_control, parse_mode="Markdown")
 
-# --- ВОССТАНОВЛЕНИЕ ПУЛЬТА УПРАВЛЕНИЯ СДЕЛКОЙ ДЛЯ ГАРАНТА ИЗ АДМИНКИ ---
+# --- 6. ВОССТАНОВЛЕНИЕ ПУЛЬТА УПРАВЛЕНИЯ СДЕЛКОЙ ДЛЯ ГАРАНТА ИЗ АДМИНКИ ---
 @router.callback_query(F.data == "admin_active_guarantor_deals")
 async def admin_restore_guarantor_panel(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
     await state.clear()
     user_id = callback.from_user.id
-    
+ 
     async with aiosqlite.connect(DB_NAME) as db:
-        # Ищем активную сделку, где текущий админ/гарант уже назначен модератором
         # ИСПРАВЛЕНО: Добавлены новые асинхронные статусы 'waiting_deposit' и 'waiting_payment'
         query = """
             SELECT id, buyer_id, seller_id, status FROM deals 
@@ -386,53 +333,46 @@ async def admin_restore_guarantor_panel(callback: types.CallbackQuery, state: FS
         """
         async with db.execute(query, (user_id,)) as cursor:
             active_deal = await cursor.fetchone()
-            
-    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text=" Назад в админку", callback_data="back_to_admin")]
-    ])
-    
+ 
+    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text=" Назад в админку", callback_data="back_to_admin")]])
     if not active_deal:
         await callback.message.edit_text(" **У вас нет активных сделок на модерации.**\nВы не привязаны ни к одному текущему обмену в качестве Гаранта.", reply_markup=kb_back)
         return
-        
+ 
     deal_id, buyer_id, seller_id, status = active_deal
-    
+ 
     async with aiosqlite.connect(DB_NAME) as db:
-        # ИСПРАВЛЕНО: Запрос к новым полям реквизитов (card, fkwallet, crypto_address) взамен удаленного piastrix
-        req_query = "SELECT card, fkwallet, crypto_address FROM requisites WHERE tg_id = ?"
-        async with db.execute(req_query, (buyer_id,)) as b_cur:
-            b_req = await b_cur.fetchone()
-        async with db.execute(req_query, (seller_id,)) as s_cur:
-            s_req = await s_cur.fetchone()
-            
-    b_card, b_fk, b_crypto = b_req if b_req else ("не указано", "не указано", "не указано")
-    s_card, s_fk, s_crypto = s_req if s_req else ("не указано", "не указано", "не указано")
-    
-    # Кнопки пульта управления для Гаранта
+        # ИСПРАВЛЕНО: Запрос строго к новым 5 полям реквизитов (без piastrix и ton)
+        req_query = "SELECT card, crypto_bot, bybit, other_wallets, fkwallet FROM requisites WHERE tg_id = ?"
+        async with db.execute(req_query, (buyer_id,)) as b_cur: b_req = await b_cur.fetchone()
+        async with db.execute(req_query, (seller_id,)) as s_cur: s_req = await s_cur.fetchone()
+ 
+    b_card, b_cbot, b_bybit, b_other, b_fk = b_req if b_req else ("не указано", "не указано", "не указано", "не указано", "не указано")
+    s_card, s_cbot, s_bybit, s_other, s_fk = s_req if s_req else ("не указано", "не указано", "не указано", "не указано", "не указано")
+ 
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text=" Закрыть спор (Выпустить крипту)", callback_data=f"guarantor_complete_{deal_id}")],
         [types.InlineKeyboardButton(text="❌ Отменить сделку (Вернуть крипту)", callback_data=f"guarantor_cancel_{deal_id}")],
         [types.InlineKeyboardButton(text=" Вернуться в админку", callback_data="back_to_admin")]
     ])
-    
-    # ИСПРАВЛЕНО: Безопасные асинхронные метки статусов без фиатного баланса Гаранта
+ 
     status_labels = {
         'waiting_deposit': 'Ожидание крипто-депозита от Продавца',
         'waiting_payment': 'Крипта заморожена / Ожидание перевода фиата Покупателем на карту',
         'waiting_delivery': 'Покупатель заявил об оплате / Ожидание проверки Продавцом',
         'dispute': 'Открыт официальный спор (Арбитраж Гаранта)'
     }
-    
+ 
     await callback.message.edit_text(
         f" **Восстановление пульта Гаранта для сделки #{deal_id}!**\n\n"
         f" Текущий статус: _{status_labels.get(status, status)}_\n\n"
-        f" **ДАННЫЕ ДЛЯ ПРОВЕРКИ ЧЕКОВ И ТРАНЗАКЦИЙ:**\n\n"
-        f" **Покупатель крипты (ID: `{buyer_id}`):**\n"
-        f"• Адрес получения монет: `{b_crypto}`\n"
-        f"• Кошелек FkWallet: `{b_fk}`\n\n"
-        f" **Продавец крипты (ID: `{seller_id}`):**\n"
+        f" **ДАННЫЕ ДЛЯ ПРОВЕРКИ ЧЕКОВ И ТРАНЗАКЦИЙ (Покупатель):**\n"
+        f"• Crypto Bot: `{b_cbot}` | • Bybit: `{b_bybit}`\n"
+        f"• Другие кошельки: `{b_other}` | • FkWallet: `{b_fk}`\n\n"
+        f" **ДАННЫЕ ДЛЯ ПРОВЕРКИ ТРАНЗАКЦИЙ (Продавец):**\n"
         f"• Карта получения фиата: `{s_card}`\n\n"
         f"Используйте кнопки пульта ниже для принудительного закрытия сделки или возврата крипто-депозита Продавцу:",
         reply_markup=kb_admin_control,
         parse_mode="Markdown"
     )
+
