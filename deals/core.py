@@ -72,16 +72,19 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
         
     dir_title = DIRECTION_TITLES.get(direction, direction)
     
- #Указываем правильный путь из папки deals
-from deals.actions import send_deal_interface_to_user
-
+    # ИСПРАВЛЕНО: Ровно 4 пробела перед каждой строкой!
+    from deals.actions import send_deal_interface_to_user
+    
     # Отправляем интерфейсы шага депонирования обоим участникам
     await send_deal_interface_to_user(bot, seller_id, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
     await send_deal_interface_to_user(bot, buyer_id_final, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
     
     # Стираем стакан у того, кто нажал кнопку, чтобы обновить экран
-    try: await callback.message.delete()
-    except: pass
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
 # --- ПУЛЕНЕПРОБИВАЕМЫЙ АНОНИМНЫЙ ЧАТ (ЗАЩИТА ОТ ИНЪЕКЦИЙ И DOS БЛОКИРОВОК) ---
 @router.message((F.text | F.photo) & ~F.text.startswith("/"))
 async def anonymous_chat_relay(message: types.Message, bot: Bot, state: FSMContext = None):
