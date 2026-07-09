@@ -67,7 +67,7 @@ async def process_direction_type_choice(callback: types.CallbackQuery):
         parse_mode="Markdown"
     )
 @router.callback_query(F.data.startswith("view_offers_"))
-async def display_offers_ стакан(callback: types.CallbackQuery):
+async def display_offers_list(callback: types.CallbackQuery):
     """Вывод списка ордеров с поддержкой пагинации, сортировки (time/rate) и только через Гаранта"""
     await callback.answer()
     
