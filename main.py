@@ -10,12 +10,12 @@ from config import BOT_TOKEN
 from database import init_db, has_active_deal
 from constants import DEAL_STATUS_NAMES
 
-# Импортируем роутеры из корневой папки
 import cabinet
 import offers
 import verification
+import admin
 
-# ИСПРАВЛЕНО: Импортируем один главный роутер из пакета deals
+# Импортируем один главный роутер из пакета deals
 from deals import router as deals_router
 
 # ИСПРАВЛЕНО: Импортируем модули сделок и рейтингов из папки deals
@@ -87,16 +87,15 @@ async def main():
     # 1. Создаем таблицы в БД и включаем режим высокой производительности WAL
     await init_db()
     
-    # 2. Подключаем все разработанные роутеры компонентов платформы
     dp.include_router(cabinet.router)
     dp.include_router(offers.router)
     dp.include_router(verification.router)
-    
-    # ИСПРАВЛЕНО: Вместо четырех вызовов подключаем единый роутер сделок
+    dp.include_router(admin.router) # РЕГИСТРИРУЕМ ТУТ
     dp.include_router(deals_router)
     
-    # 3. Запускаем асинхронный фоновый таймаут-воркер контроля сделок
     asyncio.create_task(auto_cancel_expired_deals(bot))
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
     
     print("[СИСТЕМА]: P2P Бот успешно запущен в асинхронном режиме безопасности.")
     
