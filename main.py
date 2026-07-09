@@ -64,7 +64,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             
     if active_deal:
         deal_id, status, buyer_id, seller_id, guarantor_id = active_deal
-        from actions import send_deal_interface_to_user
+        from deals.actions import send_deal_interface_to_user
         await send_deal_interface_to_user(bot, tg_id, deal_id, status, buyer_id, seller_id, guarantor_id, message)
         return
 
