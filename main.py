@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sys
+import random
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -42,14 +43,14 @@ dp.callback_query.middleware(PlatformSecurityMiddleware())
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    """Точка старта бота с перехватом и жестким разделением ролей Админ/Юзер"""
+    """Точка старта бота с жестким разделением ролей Админ / Заявка KYC / Верифицированный юзер"""
     await state.clear()
     tg_id = message.from_user.id
     
     import aiosqlite
     from database import DB_NAME
     
-    # 1. Проверяем активные сделки
+    # --- ШАГ 1: ПРОВЕРКА АКТИВНЫХ СДЕЛК ---
     async with aiosqlite.connect(DB_NAME) as db:
         query = """
             SELECT id, status, buyer_id, seller_id, guarantor_id 
@@ -67,7 +68,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await send_deal_interface_to_user(bot, tg_id, deal_id, status, buyer_id, seller_id, guarantor_id, message)
         return
 
-    # 2. ИСПРАВЛЕНО: Если это Администратор — принудительно перенаправляем в админку!
+    # --- ШАГ 2: ПРОВЕРКА НА РОЛЬ АДМИНИСТРАТОРА ---
     if tg_id in ADMIN_IDS:
         import admin
         await message.answer(
@@ -76,16 +77,57 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         return
 
-    # 3. Если обычный пользователь — отдаем стандартный P2P-интерфейс
+    # --- ШАГ 3: ЖЕСТКАЯ ПРОВЕРКА СТАТУСА ВЕРИФИКАЦИИ (KYC) ---
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Проверяем, есть ли юзер в базе и какой у него статус верификации
+        async with db.execute("SELECT is_verified, nickname FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
+            user_kyc = await cursor.fetchone()
+            
+    # Если пользователя еще нет в БД (первый старт)
+    if not user_kyc:
+        # Генерируем анонимный никнейм из двух массивов слов
+        adjectives = ["Epic", "Brave", "Golden", "Rapid", "Shadow", "Silent", "Crypto", "Alpha"]
+        nouns = ["Whale", "Punk", "Trader", "Shark", "Wolf", "Bull", "Bear", "Falcon"]
+        generated_nick = f"{random.choice(adjectives)} {random.choice(nouns)} #{random.randint(100, 999)}"
+        
+        async with aiosqlite.connect(DB_NAME) as db:
+            # Создаем пользователя со статусом is_verified = 0
+            await db.execute(
+                "INSERT INTO users (tg_id, nickname, is_verified, user_status) VALUES (?, ?, 0, 'verified')",
+                (tg_id, generated_nick)
+            )
+            # Инициализируем пустую строку реквизитов для защиты от падений ЛК
+            await db.execute("INSERT INTO requisites (tg_id) VALUES (?)", (tg_id,))
+            await db.commit()
+        is_verified = 0
+    else:
+        is_verified = user_kyc[0]
+
+    # Если пользователь НЕ верифицирован (is_verified == 0), блокируем маркет
+    if is_verified == 0:
+        kb_kyc = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🚀 Пройти верификацию", callback_data="start_verification")]
+        ])
+        await message.answer(
+            "👋 **Добро пожаловать на P2P Торговую Платформу!**\n\n"
+            "⚠️ **Доступ ограничен!**\n"
+            "Для защиты системы от спам-ботов, мошенников и мультиаккаунтов, "
+            "каждый участник обязан подтвердить свою личность перед началом торговли.\n\n"
+            "Нажмите кнопку ниже, чтобы ознакомиться с инструкцией как пройти верификацию и отправить заявку администраторам платформы:",
+            reply_markup=kb_kyc,
+            parse_mode="Markdown"
+        )
+        return
+
+    # --- ШАГ 4: ДОСТУП ДЛЯ ПОЛНОСТЬЮ ВЕРИФИЦИРОВАННЫХ ПОЛЬЗОВАТЕЛЕЙ ---
     import cabinet
     await message.answer(
         "👋 **Добро пожаловать на P2P Торговую Платформу!**\n\n"
-        "🛡 Все операции проходят строго через асинхронного Гаранта системы.\n\n"
-        "Используйте интерактивное меню ниже для работы:",
+        "🟢 Ваш профиль успешно верифицирован. Вам открыт полный доступ к торговым стаканам и обменам через Гаранта.\n\n"
+        "Используйте меню ниже для настройки реквизитов и управления ордерами:",
         reply_markup=cabinet.get_main_keyboard(),
         parse_mode="Markdown"
     )
-
 
 # --- ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ВСЕЙ СИСТЕМЫ ---
 async def main():
