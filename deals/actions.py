@@ -10,7 +10,7 @@ router = Router()
 async def send_deal_interface_to_user(bot: Bot, target_id: int, deal_id: int, status: str, buyer_id: int, seller_id: int, guarantor_id: int, edit_message_obj=None):
     """
     Централизованная функция генерации интерфейсов сделки.
-    Используется в core.py, cabinet.py и main.py для отрисовки актуального экрана.
+    Автоматически подтягивает нужные реквизиты под направление обмена.
     """
     async with aiosqlite.connect(DB_NAME) as db:
         # Извлекаем подробности лота
@@ -48,19 +48,18 @@ async def send_deal_interface_to_user(bot: Bot, target_id: int, deal_id: int, st
     if target_id == seller_id:
         if status == "waiting_deposit":
             final_text += (
-                "⚠️ **ВАШ ШАГ!** Для запуска обмена вам необходимо депонировать (заморозить) криптовалюту.\n\n"
+                "⚠️ **ВАШ ШАГ!** Для запуска обмена вам необходимо депонировать (заморозить) активы.\n\n"
                 "Переведите указанный объем на официальный кошелек платформы/Гаранта и после успешной транзакции нажмите кнопку ниже.\n"
-                "❌ **Внимание:** Покупатель не увидит ваши реквизиты, пока Гарант не подтвердит депозит!"
+                "❌ **Внимание:** Покупатель не увидит реквизиты вашей карты, пока Гарант не подтвердит ваш депозит!"
             )
             kb_list.append([types.InlineKeyboardButton(text="💎 Я перевел депозит Гаранту", callback_data=f"deal_action_deposited_{deal_id}")])
             
         elif status == "waiting_payment":
             final_text += (
                 "⏳ Гарант подтвердил ваш крипто-депозит!\n\n"
-                "Ожидайте, пока Покупатель совершит прямой перевод фиата (рублей) на вашу Карту/СБП.\n"
+                "Ожидайте, пока Покупатель совершит прямой перевод фиата (рублей) на вашу Карту.\n"
                 "Вы получите уведомление, как только он отметит сделку оплаченной. Анонимный чат активен."
             )
-            # У продавца нет кнопок на этом этапе, он просто ждет
             kb_list.append([types.InlineKeyboardButton(text="💬 Анонимный чат активен (Пишите в бот)", callback_data="dummy")])
             
     # --- СЦЕНАРИЙ ДЛЯ ПОКУПАТЕЛЯ КРИПТЫ ---
@@ -73,43 +72,57 @@ async def send_deal_interface_to_user(bot: Bot, target_id: int, deal_id: int, st
             kb_list.append([types.InlineKeyboardButton(text="⏳ Ожидание депозита...", callback_data="dummy")])
             
         elif status == "waiting_payment":
-            # Вытягиваем реквизиты продавца для покупателя
+            # ИСПРАВЛЕНО: Вытягиваем реквизиты Продавца и Покупателя для наглядности
             async with aiosqlite.connect(DB_NAME) as db:
-                async with db.execute("SELECT card, sbp FROM requisites WHERE tg_id = ?", (seller_id,)) as r_cursor:
+                async with db.execute("SELECT card FROM requisites WHERE tg_id = ?", (seller_id,)) as r_cursor:
                     s_req = await r_cursor.fetchone()
-            s_card, s_sbp = s_req if s_req else ("не указано", "не указано")
+                # Вытягиваем целевую колонку Покупателя для вывода (чтобы он видел, куда ему зачислят крипту)
+                async with db.execute("SELECT crypto_bot, bybit, other_wallets, fkwallet FROM requisites WHERE tg_id = ?", (buyer_id,)) as b_cursor:
+                    b_req = await b_cursor.fetchone()
+                    
+            s_card = s_req[0] if s_req and s_req[0] else "не указано"
+            c_bot, bybit, other, fk = b_req if b_req else ("", "", "", "")
+            
+            # Определяем, какие именно реквизиты получения крипты отобразить Покупателю для сверки
+            target_wallet = "не заполнено"
+            if direction == "crypto_bot": target_wallet = f"🤖 Crypto Bot: `{c_bot}`"
+            elif direction == "bybit": target_wallet = f"📈 Bybit UID/Wallet: `{bybit}`"
+            elif direction == "other_wallets": target_wallet = f"🌐 Внешний кошелек: `{other}`"
+            elif direction == "fkwallet": target_wallet = f"👛 FkWallet: `{fk}`"
             
             final_text += (
-                "✅ **КРИПТА ЗАМОРОЖЕНА ГАРАНТОМ! ВАШ ШАГ!**\n\n"
-                "Пожалуйста, совершите прямой фиатный перевод напрямую Продавцу по указанным реквизитам:\n"
-                f"💳 **Банковская карта:** `{s_card}`\n"
-                f"📲 **Резервный СБП:** `{s_sbp}`\n\n"
-                "⚠️ **ВАЖНО:** Переводите рубли СТРОГО по этим реквизитам. Если контрагент присылает другие данные в чате — это мошенник! После перевода нажмите кнопку ниже:"
+                f"✅ **КРИПТА ЗАМОРОЖЕНА ГАРАНТОМ! ВАШ ШАГ!**\n\n"
+                f"Пожалуйста, совершите прямой фиатный перевод со своей карты напрямую Продавцу по указанным реквизитам:\n"
+                f"💳 **Банковская карта Продавца:** `{s_card}`\n\n"
+                f"📋 **Куда вам будут зачислены монеты (для сверки):**\n"
+                f"{target_wallet}\n\n"
+                f"⚠️ **ВАЖНО:** Переводите рубли СТРОГО по указанной карте. Если контрагент просит другую карту в чате — это мошенник! После перевода нажмите кнопку ниже:"
             )
             kb_list.append([types.InlineKeyboardButton(text="🟢 Я оплатил на Карту Продавца", callback_data=f"deal_action_paid_{deal_id}")])
 
-    # Добавляем рендеринг кнопок для следующих статусов, которые мы опишем далее
-    # (waiting_delivery и dispute обрабатываются по аналогии в Частях 2 и 3)
-    
+    # Пуленепробиваемый рендеринг без падений при любых типах объектов aiogram
     reply_markup = types.InlineKeyboardMarkup(inline_keyboard=kb_list)
-    
-    # Умный UX: если передан объект сообщения, мы плавно редактируем его, иначе шлем новое
-    try:
-        if edit_message_obj:
-            await edit_message_obj.edit_text(final_text, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
+    if edit_message_obj:
+        try:
+            if isinstance(edit_message_obj, types.CallbackQuery):
+                await edit_message_obj.message.edit_text(final_text, reply_markup=reply_markup, parse_mode="Markdown")
+            elif isinstance(edit_message_obj, types.Message) and edit_message_obj.from_user.id == bot.id:
+                await edit_message_obj.edit_text(final_text, reply_markup=reply_markup, parse_mode="Markdown")
+            else:
+                await bot.send_message(chat_id=target_id, text=final_text, reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception:
             await bot.send_message(chat_id=target_id, text=final_text, reply_markup=reply_markup, parse_mode="Markdown")
-    except Exception:
-        pass
+    else:
+        await bot.send_message(chat_id=target_id, text=final_text, reply_markup=reply_markup, parse_mode="Markdown")
 @router.callback_query(F.data.startswith("deal_action_"))
 async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
     """Глобальный диспетчер действий покупателя и продавца внутри сделки"""
     await callback.answer()
     
-    # Шаблон callback_data: deal_action_[action]_[deal_id]
+    # Разбираем callback_data формата: deal_action_[action]_[deal_id]
     parts = callback.data.split("_")
     action = parts[2]     # 'deposited', 'paid', 'completed', 'dispute'
-    deal_id = int(parts[3]) # ID сделки всегда на последней позиции
+    deal_id = int(parts[3]) # ID сделки всегда лежит в конце
     user_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
@@ -124,29 +137,35 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
 
     # --- ДЕЙСТВИЕ 1: Продавец нажал "Я депонировал крипту" ---
     if action == "deposited" and user_id == seller_id and status == "waiting_deposit":
-        current_time = str(int(time.time()))
-        
         async with aiosqlite.connect(DB_NAME) as db:
-            # Извлекаем точные параметры лота из стакана для карточки Гаранта
             query_offer = "SELECT direction, amount FROM offers WHERE id = ?"
             async with db.execute(query_offer, (offer_id,)) as o_cur:
                 o_res = await o_cur.fetchone()
                 
-        # Импортируем DIRECTION_TITLES для вывода ЧЕТКОГО текстового направления
         from constants import DIRECTION_TITLES
         raw_dir = o_res[0] if o_res else "Неизвестно"
         dir_text_title = DIRECTION_TITLES.get(raw_dir, raw_dir)
         amount_val = o_res[1] if o_res else "Неизвестно"
         
-        # Информируем Продавца, что запрос улетел на проверку
+        # Информируем Продавца о запуске проверки
         await callback.message.edit_text(
             f"📥 **Заявка на верификацию депозита отправлена!**\n\n"
             f"Сделка #{deal_id} ожидает проверки Гарантом.\n"
-            f"Пожалуйста, приготовьте хэш транзакции или скриншот отправки крипты. Как только Гарант подтвердит баланс, сделка автоматически активируется.",
+            f"Пожалуйста, приготовьте хэш транзакции или скриншот отправки крипты. Как только Гарант подтвердит баланс, сделка автоматически перейдет на этап оплаты.",
             parse_mode="Markdown"
         )
         
-        # Кнопка для команды Гарантов в закрытом канале/чате
+        # Уведомляем Покупателя, что Продавец подал заявку на депозит
+        try:
+            await bot.send_message(
+                chat_id=buyer_id,
+                text=f"📥 **Продавец заявил о переводе депозита по сделке #{deal_id}!**\n\n"
+                     f"Ожидаем, пока официальный Гарант проверит и подтвердит поступление монет на безопасный кошелек платформы."
+            )
+        except Exception:
+            pass
+        
+        # Кнопка для команды Гарантов
         kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
         ])
@@ -158,15 +177,15 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             f"💰 **Объем / Сумма:** `{amount_val}`\n"
             f"👤 **Продавец крипты:** [Трейдер](tg://user?id={seller_id}) (ID: `{seller_id}`)\n"
             f"👥 **Покупатель фиата:** [Трейдер](tg://user?id={buyer_id}) (ID: `{buyer_id}`)\n\n"
-            f"Нажмите кнопку ниже, чтобы зайти в анонимный чат, выдать реквизиты кошелька и подтвердить поступление активов."
+            f"Нажмите кнопку ниже, чтобы зайти в анонимный чат, выдать реквизиты кошелька системы и подтвердить поступление активов."
         )
         
-        # Отправляем алерт в общий чат администраторов, если он настроен
+        # Отправляем алерт в общий чат администраторов
         if ADMIN_CHAT_ID != 0:
             try: await bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_g_text, reply_markup=kb_admin, parse_mode="Markdown")
             except: pass
         else:
-            # Если общего чата нет, спамим всем админам в личку (как в старой логике)
+            # Если общий чат не настроен, спамим всем админам в ЛС
             all_guarantor_ids = list(ADMIN_IDS)
             try:
                 async with aiosqlite.connect(DB_NAME) as db:
@@ -181,23 +200,21 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 try: await bot.send_message(chat_id=receiver_id, text=alert_g_text, reply_markup=kb_admin, parse_mode="Markdown")
                 except: continue
         return
-    # --- ДЕЙСТВИЕ 2: Покупатель отметил сдеку как "ОПЛАЧЕННУЮ" на карту ---
+    # --- ДЕЙСТВИЕ 2: Покупатель отметил сделку как "ОПЛАЧЕННУЮ" на карту ---
     elif action == "paid" and user_id == buyer_id and status == "waiting_payment":
         current_time = str(int(time.time()))
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("UPDATE deals SET status = 'waiting_delivery', timer_start = ? WHERE id = ?", (current_time, deal_id))
             await db.commit()
             
-        # Корректируем экран Покупателя, убирая кнопку оплаты
         await callback.message.edit_text(
             "💸 **Вы подтвердили отправку фиатных средств Продавцу!**\n\n"
             "Таймер ожидания оплаты успешно остановлен. Теперь Продавец проверяет свой банковский счет.\n"
-            "💬 Анонимный чат активен. Вы можете отправить чек/скриншот перевода для ускорения проверки.",
+            "💬 Анонимный чат активен. Вы можете отправить чек/скриншот перевода для ускорения проверки контрагентом.",
             parse_mode="Markdown"
         )
         
-        # Генерируем пульт управления для Продавца. 
-        # В нашей асинхронной схеме Продавец выпускает крипту САМ, если рубли пришли на карту!
+        # Генерируем пульт управления для Продавца
         kb_seller = types.InlineKeyboardMarkup(inline_keyboard=[
             [types.InlineKeyboardButton(text="✅ Рубли на карте (Выпустить крипту)", callback_data=f"deal_action_completed_{deal_id}")],
             [types.InlineKeyboardButton(text="⚠️ Я не получил деньги (Спор / Диспут)", callback_data=f"deal_action_dispute_{deal_id}")]
@@ -216,7 +233,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
     # --- ДЕЙСТВИЕ 3: Успешное закрытие сделки Продавцом (Выпуск крипты) ---
     elif action == "completed" and user_id == seller_id and status == "waiting_delivery":
         async with aiosqlite.connect(DB_NAME) as db:
-            # Защита от Double-Spend (повторного клика)
+            # Защита от Double-Spend (повторного клика в условиях сетевых задержек)
             async with db.execute("SELECT status FROM deals WHERE id = ?", (deal_id,)) as check_cur:
                 res_status = await check_cur.fetchone()
                 if res_status and res_status[0] == "completed":
@@ -268,11 +285,10 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
             "Пожалуйста, ожидайте. Покупатель должен отправить чек, а Продавец — выписку по карте прямо сюда, в анонимный чат."
         )
         
-        # Информируем участников сделки
         await callback.message.edit_text(dispute_msg, parse_mode="Markdown")
         await bot.send_message(chat_id=buyer_id, text=dispute_msg, parse_mode="Markdown")
         
-        # Формируем экстренный алерт для Гарантов
+        # Формируем экстренный алерт для Гарантов с четким направлением
         from constants import DIRECTION_TITLES
         async with aiosqlite.connect(DB_NAME) as db:
             async with db.execute("SELECT direction, amount FROM offers WHERE id = ?", (offer_id,)) as o_cur:
@@ -302,4 +318,3 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
                 try: await bot.send_message(chat_id=g_id, text=alert_d_text, reply_markup=kb_admin, parse_mode="Markdown")
                 except: continue
         return
-
