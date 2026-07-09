@@ -15,6 +15,9 @@ import cabinet
 import offers
 import verification
 
+# ИСПРАВЛЕНО: Импортируем один главный роутер из пакета deals
+from deals import router as deals_router
+
 # ИСПРАВЛЕНО: Импортируем модули сделок и рейтингов из папки deals
 from deals import core
 from deals import actions
@@ -87,12 +90,10 @@ async def main():
     # 2. Подключаем все разработанные роутеры компонентов платформы
     dp.include_router(cabinet.router)
     dp.include_router(offers.router)
-    dp.include_router(core.router)
-    dp.include_router(actions.router)
-    dp.include_router(guarantor.router)
-    dp.include_router(admin.router)
     dp.include_router(verification.router)
-    dp.include_router(rating.router)
+    
+    # ИСПРАВЛЕНО: Вместо четырех вызовов подключаем единый роутер сделок
+    dp.include_router(deals_router)
     
     # 3. Запускаем асинхронный фоновый таймаут-воркер контроля сделок
     asyncio.create_task(auto_cancel_expired_deals(bot))
