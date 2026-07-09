@@ -10,15 +10,16 @@ from config import BOT_TOKEN
 from database import init_db, has_active_deal
 from constants import DEAL_STATUS_NAMES
 
-# Импортируем роутеры всех модулей
+# Импортируем роутеры из корневой папки
 import cabinet
 import offers
-import core
-import actions
-import guarantor
-import admin
 import verification
-import rating
+
+# ИСПРАВЛЕНО: Импортируем модули сделок и рейтингов из папки deals
+from deals import core
+from deals import actions
+from deals import guarantor
+from deals import rating
 
 # ИСПРАВЛЕНО: Импортируем новый защитный мидлварь взамен старого
 from ban_middleware import PlatformSecurityMiddleware
