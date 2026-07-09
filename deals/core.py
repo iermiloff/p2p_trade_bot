@@ -73,17 +73,67 @@ async def process_deal_opening(callback: types.CallbackQuery, bot: Bot):
     dir_title = DIRECTION_TITLES.get(direction, direction)
     
     # ИСПРАВЛЕНО: Ровно 4 пробела перед каждой строкой!
-    from deals.actions import send_deal_interface_to_user
-    
     # Отправляем интерфейсы шага депонирования обоим участникам
+    from deals.actions import send_deal_interface_to_user
     await send_deal_interface_to_user(bot, seller_id, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
     await send_deal_interface_to_user(bot, buyer_id_final, deal_id, "waiting_deposit", buyer_id_final, seller_id, None)
     
-    # Стираем стакан у того, кто нажал кнопку, чтобы обновить экран
+    # --- ИСПРАВЛЕНО: ОТПРАВКА КРИТИЧЕСКОГО АЛЕРТА КОМАНДЕ ГАРАНТОВ ПРИ ОТКРЫТИИ СДЕЛКИ ---
+    from config import ADMIN_CHAT_ID, ADMIN_IDS
+    from constants import DIRECTION_TITLES
+    
+    # Формируем красивый текст направления для Гаранта
+    dir_text_title = DIRECTION_TITLES.get(direction, direction)
+    
+    kb_admin = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⚡ Взять сделку как Гарант", callback_data=f"admin_claim_deal_{deal_id}")]
+    ])
+    
+    alert_g_text = (
+        f"📥 **[НОВАЯ СДЕЛКА ЧЕРЕЗ ГАРАНТА] Сделка #{deal_id}**\n\n"
+        f"🧭 **Чёткое направление:** `{dir_text_title}`\n"
+        f"💰 **Объем / Сумма:** `{amount}`\n"
+        f"📊 **Курс / Условия:** `{rate}`\n\n"
+        f"👤 **Продавец:** [Трейдер](tg://user?id={seller_id}) (ID: `{seller_id}`)\n"
+        f"👥 **Покупатель:** [Трейдер](tg://user?id={buyer_id_final}) (ID: `{buyer_id_final}`)\n\n"
+        f"Нажмите кнопку ниже, чтобы закрепить сделку за собой, открыть анонимный чат участников и принять крипто-депозит."
+    )
+    
+    # Публикуем алерт в рабочий чат модераторов, где сидят все админы и гаранты
+    if ADMIN_CHAT_ID != 0:
+        try:
+            await bot.send_message(chat_id=ADMIN_CHAT_ID, text=alert_g_text, reply_markup=kb_admin, parse_mode="Markdown")
+        except Exception as e:
+            print(f"[ОШИБКА ОТПРАВКИ В ЧАТ АДМИНОВ]: {e}")
+    else:
+        # ИСПРАВЛЕНО: Если чата нет, собираем админов И живых Гарантов комьюнити из базы для рассылки в ЛС
+        all_guarantor_ids = list(ADMIN_IDS)
+        try:
+            async with aiosqlite.connect(DB_NAME) as db:
+                # Тянем из БД всех пользователей со статусом Гаранта
+                async with db.execute("SELECT tg_id FROM users WHERE user_status IN ('guarantor_member', 'guarantor')") as g_cursor:
+                    rows = await g_cursor.fetchall()
+                    for row in rows:
+                        g_uid = row[0]
+                        if g_uid not in all_guarantor_ids:
+                            all_guarantor_ids.append(g_uid)
+        except Exception as db_err:
+            print(f"[ОШИБКА СБОРА ГАРАНТОВ КОМЬЮНИТИ]: {db_err}")
+            
+        # Рассылаем уведомление в личные сообщения каждому
+        for receiver_id in all_guarantor_ids:
+            try:
+                await bot.send_message(chat_id=receiver_id, text=alert_g_text, reply_markup=kb_admin, parse_mode="Markdown")
+            except Exception:
+                continue
+
+
+    # Стираем стакан у того, кто нажал кнопку, для обновления экрана
     try:
         await callback.message.delete()
     except Exception:
         pass
+
 
 # --- ПУЛЕНЕПРОБИВАЕМЫЙ АНОНИМНЫЙ ЧАТ (ЗАЩИТА ОТ ИНЪЕКЦИЙ И DOS БЛОКИРОВОК) ---
 @router.message((F.text | F.photo) & ~F.text.startswith("/"))
