@@ -54,7 +54,7 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("UPDATE deals SET guarantor_id = ? WHERE id = ?", (user_id, deal_id))
         
-        # Запрос ко всем 5 полям реквизитов
+        # Запрос ко всем 5 новым полям реквизитов без ошибок старых полей
         req_query = "SELECT card, crypto_bot, bybit, other_wallets, fkwallet FROM requisites WHERE tg_id = ?"
         async with db.execute(req_query, (buyer_id,)) as b_cur: b_req = await b_cur.fetchone()
         async with db.execute(req_query, (seller_id,)) as s_cur: s_req = await s_cur.fetchone()
@@ -67,11 +67,11 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     b_card, b_cbot, b_bybit, b_other, b_fk = b_req if b_req else ("не указано", "не указано", "не указано", "не указано", "не указано")
     s_card, s_cbot, s_bybit, s_other, s_fk = s_req if s_req else ("не указано", "не указано", "не указано", "не указано", "не указано")
     
-    raw_dir = offer_data if offer_data else "Неизвестно"
+    raw_dir = offer_data[0] if offer_data else "Неизвестно"
     dir_title_text = DIRECTION_TITLES.get(raw_dir, raw_dir)
-    amount_val = offer_data if offer_data else "Неизвестно"
+    amount_val = offer_data[1] if offer_data else "Неизвестно"
     
-    # ИСПРАВЛЕНО: Сделка ОСТАЕТСЯ в статусе waiting_deposit! Мы не переводим её в waiting_payment раньше времени.
+    # Сделка ОСТАЕТСЯ в статусе waiting_deposit! Мы не переводим её в waiting_payment раньше времени.
     # Пульт управления для Гаранта, пока он ждет монеты от Продавца
     kb_admin_control = types.InlineKeyboardMarkup(inline_keyboard=[
         [types.InlineKeyboardButton(text="✅ Крипта на балансе (Открыть фиатный шаг)", callback_data=f"guarantor_confirm_crypto_{deal_id}")],
@@ -100,6 +100,7 @@ async def admin_claim_deal(callback: types.CallbackQuery, bot: Bot):
     from deals.actions import send_deal_interface_to_user
     await send_deal_interface_to_user(bot, buyer_id, deal_id, "waiting_deposit", buyer_id, seller_id, user_id)
     await send_deal_interface_to_user(bot, seller_id, deal_id, "waiting_deposit", buyer_id, seller_id, user_id)
+
 @router.callback_query(F.data.startswith("guarantor_confirm_crypto_"))
 async def guarantor_confirm_crypto_received(callback: types.CallbackQuery, bot: Bot):
     """Гарант лично проверил кошелёк, увидел крипту и даёт отмашку Покупателю платить рубли"""
@@ -144,3 +145,86 @@ async def guarantor_confirm_crypto_received(callback: types.CallbackQuery, bot: 
     
     await callback.message.answer(f"🚀 **Депозит подтверждён!** Покупателю отправлены реквизиты для перевода рублей на карту.")
 
+# --- ОБРАБОТКА ДЕЙСТВИЙ ГАРАНТА (РУЧНОЙ ВЫПУСК / ОТМЕНА ПРИ ДИСПУТАХ) ---
+@router.callback_query(F.data.startswith("guarantor_"))
+async def handle_guarantor_actions(callback: types.CallbackQuery, bot: Bot):
+    """Принятие окончательного решения Арбитром/Гарантом по спорной сделке"""
+    await callback.answer()
+    
+    parts = callback.data.split("_")
+    action = parts[1]   # ИСПРАВЛЕНО: Строго берем индекс 1 ('complete' или 'cancel')
+    deal_id = int(parts[2]) # ИСПРАВЛЕНО: ID сделки лежит под индексом 2
+    user_id = callback.from_user.id
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        query = "SELECT buyer_id, seller_id, status, guarantor_id, offer_id FROM deals WHERE id = ?"
+        async with db.execute(query, (deal_id,)) as cursor:
+            deal = await cursor.fetchone()
+            
+    if not deal:
+        await callback.message.edit_text("❌ Ошибка: Сделка не найдена в базе данных.")
+        return
+        
+    buyer_id, seller_id, status, guarantor_id, offer_id = deal
+    
+    # Жесткая защита от несанкционированного доступа к кнопкам модерации
+    if not guarantor_id or guarantor_id != user_id:
+        await callback.answer("🛑 Вы не являетесь назначенным Гарантом этой сделки!", show_alert=True)
+        return
+        
+    if status in ["completed", "cancelled"]:
+        await callback.answer("🔒 Эта сделка уже была закрыта или аннулирована ранее.", show_alert=True)
+        return
+
+    # Вне зависимости от решения, после вердикта чат закрывается, вызываем меню отзывов из rating.py
+    kb_rate_buyer = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"⭐ {i}", callback_data=f"rate_user_{buyer_id}_{i}") for i in range(1, 6)],
+        [types.InlineKeyboardButton(text="🏠 В главное меню", callback_data="open_main_menu")]
+    ])
+    kb_rate_seller = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text=f"⭐ {i}", callback_data=f"rate_user_{seller_id}_{i}") for i in range(1, 6)],
+        [types.InlineKeyboardButton(text="🏠 В главное меню", callback_data="open_main_menu")]
+    ])
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        # --- СЦЕНАРИЙ А: Гарант подтверждает факт оплаты и принудительно выпускает крипту Покупателю ---
+        if action == "complete":
+            await db.execute("UPDATE deals SET status = 'completed' WHERE id = ?", (deal_id,))
+            await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (buyer_id,))
+            await db.execute("UPDATE users SET deals_count = deals_count + 1 WHERE tg_id = ?", (seller_id,))
+            await db.commit()
+            
+            await callback.message.edit_text(f"✅ **Сделка #{deal_id} принудительно закрыта.** Криптовалютный депозит присужден Покупателю.")
+            
+            try:
+                await bot.send_message(
+                    chat_id=buyer_id, 
+                    text=f"⚖️ **Решение по Диспуту #{deal_id}!**\n\nАрбитр проверил чеки и закрыл сделку в вашу пользу. Крипта зачислена на ваши реквизиты.\nПожалуйста, оцените контрагента:", 
+                    reply_markup=kb_rate_seller,
+                    parse_mode="Markdown"
+                )
+                await bot.send_message(
+                    chat_id=seller_id, 
+                    text=f"⚖️ **Решение по Диспуту #{deal_id}!**\n\nАрбитр принудительно закрыл сделку в пользу Покупателя на основании подтверждения оплаты.\nПожалуйста, оцените контрагента:", 
+                    reply_markup=kb_rate_buyer,
+                    parse_mode="Markdown"
+                )
+            except: pass
+            return
+            
+        # --- СЦЕНАРИЙ Б: Гарант отменяет сделку и возвращает крипту Продавцу ---
+        elif action == "cancel":
+            await db.execute("UPDATE deals SET status = 'cancelled' WHERE id = ?", (deal_id,))
+            await db.execute("UPDATE offers SET status = 'active' WHERE id = ?", (offer_id,))
+            await db.commit()
+            
+            await callback.message.edit_text(f"❌ **Сделка #{deal_id} отменена.** Криптовалютный депозит возвращен Продавцу. Ордер возвращен в стакан.")
+            
+            cancel_text_buyer = f"❌ **Решение по Диспуту #{deal_id}!**\n\nАрбитр аннулировал сделку. Факт оплаты не подтвержден. Крипта возвращена Продавцу."
+            cancel_text_seller = f"❌ **Решение по Диспуту #{deal_id}!**\n\nАрбитр аннулировал сделку в вашу пользу. Крипто-депозит разморожен и возвращен на ваш баланс."
+            
+            try:
+                await bot.send_message(chat_id=buyer_id, text=cancel_text_buyer, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🏠 В меню", callback_data="open_main_menu")]]), parse_mode="Markdown")
+                await bot.send_message(chat_id=seller_id, text=cancel_text_seller, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="🏠 В меню", callback_data="open_main_menu")]]), parse_mode="Markdown")
+            except: pass
+            return
