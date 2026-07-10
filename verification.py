@@ -46,7 +46,7 @@ async def start_verification_cmd(callback: types.CallbackQuery, state: FSMContex
 
     # Если подписан — запускаем стандартный FSM-процесс ввода данных
     await state.set_state(VerificationStates.waiting_for_data)
-    await callback.message.answer("📥 Пожалуйста, отправьте скан/фотографию вашего документа или введите текстовые данные для проверки администрацией:")
+    await callback.message.answer("📥 Пожалуйста, напишите ваше имя, или отправьте фото для идентификации:")
 
 # Измените parse_mode с Markdown на HTML в хэндлере process_verification_data:
 @router.message(VerificationStates.waiting_for_data)
