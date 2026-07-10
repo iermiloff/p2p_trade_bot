@@ -146,7 +146,7 @@ async def handle_deal_actions(callback: types.CallbackQuery, bot: Bot):
         )
         
         # Автоматически пишем Гаранту в анонимный чат, что Продавец готов
-        from core import anonymous_chat_relay
+        from deals.core import anonymous_chat_relay
         # Имитируем системное сообщение в чат сделки
         async with aiosqlite.connect(DB_NAME) as db:
             async with db.execute("SELECT guarantor_id FROM deals WHERE id = ?", (deal_id,)) as cur:
