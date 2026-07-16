@@ -70,65 +70,55 @@ async def process_direction_type_choice(callback: types.CallbackQuery):
         reply_markup=kb,
         parse_mode="Markdown"
     )
+    
 @router.callback_query(F.data.startswith("view_offers_"))
 async def display_offers_list(callback: types.CallbackQuery):
-    """Вывод списка ордеров с поддержкой динамического парсинга направлений любой длины"""
+    """Вывод списка ордеров с разделением кнопок под каждый лот и проверкой автора"""
     await callback.answer()
+    user_id = callback.from_user.id
     
-    # Шаблон callback_data: view_offers_[direction]_[offer_type]_[page]_[sort_by]
     parts = callback.data.split("_")
-    
-    # Забираем параметры строго с конца списка, чтобы исключить баг с составными именами (crypto_bot)
-    sort_by = parts[-1]   # 'time' или 'rate' (всегда последний элемент)
-    page = int(parts[-2]) # Номер страницы (всегда предпоследний)
-    offer_type = parts[-3] # 'buy' или 'sell'
-    
-    # Собираем название направления из всех оставшихся элементов посередине
-    # Отрезаем первые два элемента ('view', 'offers') и последние три (type, page, sort)
+    sort_by = parts[-1] 
+    page = int(parts[-2]) 
+    offer_type = parts[-3] 
     direction = "_".join(parts[2:-3])
     
     limit = 5
     offset = (page - 1) * limit
     
-    # Формируем SQL-запрос в зависимости от типа сортировки
     if sort_by == "rate":
-        # Сортировка по рейтингу создателя (от большего к меньшему)
         query = """
-            SELECT offers.id, offers.creator_id, offers.amount, offers.rate, users.nickname, users.rating, users.deals_count
-            FROM offers
-            JOIN users ON offers.creator_id = users.tg_id
-            WHERE offers.direction = ? AND offers.offer_type = ? AND offers.status = 'active'
-            ORDER BY users.rating DESC, offers.id DESC
-            LIMIT ? OFFSET ?
+        SELECT offers.id, offers.creator_id, offers.amount, offers.rate, users.nickname, users.rating, users.deals_count
+        FROM offers
+        JOIN users ON offers.creator_id = users.tg_id
+        WHERE offers.direction = ? AND offers.offer_type = ? AND offers.status = 'active'
+        ORDER BY users.rating DESC, offers.id DESC
+        LIMIT ? OFFSET ?
         """
     else:
-        # Сортировка по новизне (сначала новые лоты)
         query = """
-            SELECT offers.id, offers.creator_id, offers.amount, offers.rate, users.nickname, users.rating, users.deals_count
-            FROM offers
-            JOIN users ON offers.creator_id = users.tg_id
-            WHERE offers.direction = ? AND offers.offer_type = ? AND offers.status = 'active'
-            ORDER BY offers.id DESC
-            LIMIT ? OFFSET ?
+        SELECT offers.id, offers.creator_id, offers.amount, offers.rate, users.nickname, users.rating, users.deals_count
+        FROM offers
+        JOIN users ON offers.creator_id = users.tg_id
+        WHERE offers.direction = ? AND offers.offer_type = ? AND offers.status = 'active'
+        ORDER BY offers.id DESC
+        LIMIT ? OFFSET ?
         """
         
     async with aiosqlite.connect(DB_NAME) as db:
-        # Считаем общее число подходящих активных объявлений для пагинации
         count_query = "SELECT COUNT(*) FROM offers WHERE direction = ? AND offer_type = ? AND status = 'active'"
         async with db.execute(count_query, (direction, offer_type)) as c_cursor:
             total_offers = (await c_cursor.fetchone())[0]
             
-        # Загружаем порцию лотов для текущей страницы
         async with db.execute(query, (direction, offer_type, limit, offset)) as cursor:
             offers_list = await cursor.fetchall()
             
     max_pages = math.ceil(total_offers / limit) if total_offers > 0 else 1
     dir_title = DIRECTION_TITLES.get(direction, direction)
-    type_title = "Покупка (Вы продаете)" if offer_type == "buy" else "Продажа (Вы покупаете)"
+    type_title = "Покупка (Вы продаете активы)" if offer_type == "buy" else "Продажа (Вы покупаете активы)"
     
     kb_list = []
     
-    # Кнопки переключения сортировки в шапке стакана
     time_active = "🔹 " if sort_by == "time" else ""
     rate_active = "🔹 " if sort_by == "rate" else ""
     kb_list.append([
@@ -139,20 +129,22 @@ async def display_offers_list(callback: types.CallbackQuery):
     text = f"📊 **Стакан объявлений: {dir_title}**\nРежим: _{type_title}_\nСтраница: `{page}/{max_pages}`\n\n"
     
     if not offers_list:
-        text += "📭 В данном разделе пока нет активных объявлений. Вы можете создать своё!"
+        text += "📥 В данном разделе пока нет активных объявлений. Вы можете создать своё!"
     else:
         for offer_id, creator_id, amount, rate, nick, rating, deals in offers_list:
-            text += f"▪️ **Лот #{offer_id}**\n" \
-                    f"  ├ Объем/Сумма: `{amount}`\n" \
-                    f"  ├ Курс/Условия: `{rate}`\n" \
-                    f"  └ Трейдер: {nick} (⭐{rating:.2f} | ✔️{deals} сделок)\n\n"
-            
-            # СТРОГО ОДНА КНОПКА: Инициализация безопасного обмена через Гаранта
-            kb_list.append([
-                types.InlineKeyboardButton(text=f"🤝 Начать обмен по Лоту #{offer_id}", callback_data=f"deal_open_init_{offer_id}")
-            ])
-            
-    # Нижняя навигация (Стрелочки пагинации)
+            if creator_id == user_id:
+                text += f"▪️ **Лот #{offer_id} (Ваше объявление)**\n" \
+                        f" ├ Объем/Сумма: `{amount}`\n" \
+                        f" ├ Курс/Условия: `{rate}`\n" \
+                        f" └ Управление: Доступно через кнопку лота или ЛК\n\n"
+                kb_list.append([types.InlineKeyboardButton(text=f"⚙️ Управлять Лотом #{offer_id}", callback_data=f"view_off:{offer_id}")])
+            else:
+                text += f"▪️ **Лот #{offer_id}**\n" \
+                        f" ├ Объем/Сумма: `{amount}`\n" \
+                        f" ├ Курс/Условия: `{rate}`\n" \
+                        f" └ Трейдер: {nick} (⭐{rating:.2f} | {deals} сделок)\n\n"
+                kb_list.append([types.InlineKeyboardButton(text=f"🤝 Начать обмен по Лоту #{offer_id}", callback_data=f"deal_open_init_{offer_id}")])
+                
     nav_row = []
     if page > 1:
         nav_row.append(types.InlineKeyboardButton(text="⬅ Назад", callback_data=f"view_offers_{direction}_{offer_type}_{page-1}_{sort_by}"))
@@ -162,14 +154,13 @@ async def display_offers_list(callback: types.CallbackQuery):
     if nav_row:
         kb_list.append(nav_row)
         
-    # Кнопка возврата в меню навигации
-    kb_list.append([types.InlineKeyboardButton(text="⬅ Назад к направлениям", callback_data=f"nav_dir_{direction}")])
+    kb_list.append([types.InlineKeyboardButton(text="⬅ Назад к направлениям", callback_data="nav_gram_card")])
     
     try:
         await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_list), parse_mode="Markdown")
     except Exception:
-        # Защита от ошибок aiogram, если пользователь нажал на уже выбранный тип сортировки
         pass
+
 @router.callback_query(F.data == "offer_create_start")
 async def start_offer_creation(callback: types.CallbackQuery, state: FSMContext):
     """Инициализация создания объявления с проверкой лимитов активности"""
