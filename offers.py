@@ -18,15 +18,19 @@ class OfferCreateStates(StatesGroup):
     waiting_for_rate = State()
 
 def get_offers_navigation_keyboard():
-    """Генерирует клавиатуру со всеми 4 новыми направлениями обмена (все к Картам)"""
+    """Генерирует клавиатуру со всеми направлениями обмена + управление"""
     return types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="🤖 Крипта (Bot) ⇄ 💳 Карты", callback_data="nav_dir_crypto_bot")],
-        [types.InlineKeyboardButton(text="📈 Крипта (Bybit) ⇄ 💳 Карты", callback_data="nav_dir_bybit")],
-        [types.InlineKeyboardButton(text="🌐 Крипта (Другие) ⇄ 💳 Карты", callback_data="nav_dir_other_wallets")],
-        [types.InlineKeyboardButton(text="👛 FkWallet ⇄ 💳 Карты", callback_data="nav_dir_fkwallet")],
-        [types.InlineKeyboardButton(text="➕ Создать объявление", callback_data="offer_create_start")],
+        [types.InlineKeyboardButton(text="📱 Крипта (Bot) ⇄ Карты", callback_data="nav_dir_crypto_bot")],
+        [types.InlineKeyboardButton(text="📉 Крипта (Bybit) ⇄ Карты", callback_data="nav_dir_bybit")],
+        [types.InlineKeyboardButton(text="🌐 Крипта (Другие) ⇄ Карты", callback_data="nav_dir_other_wallets")],
+        [types.InlineKeyboardButton(text="👛 FkWallet ⇄ Карты", callback_data="nav_dir_fkwallet")],
+        [
+            types.InlineKeyboardButton(text="➕ Создать объявление", callback_data="offer_create_start"),
+            types.InlineKeyboardButton(text="🗂 Мои объявления", callback_data="lk_my_offers")
+        ],
         [types.InlineKeyboardButton(text="⬅ В главное меню", callback_data="open_main_menu")]
     ])
+
 
 @router.callback_query(F.data == "nav_gram_card")
 async def process_p2p_hub(callback: types.CallbackQuery, state: FSMContext):
