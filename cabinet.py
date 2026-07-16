@@ -5,7 +5,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import StateFilter
 from config import ADMIN_IDS
-from database import DB_NAME, get_user_title
+from database import DB_NAME, get_user_title, get_user_active_offers, cancel_user_offer
+from constants import DIRECTION_TITLES
 
 router = Router()
 
