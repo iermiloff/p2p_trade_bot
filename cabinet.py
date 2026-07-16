@@ -250,33 +250,138 @@ async def process_fk_saving(message: types.Message, state: FSMContext):
     await message.answer("✅ **Номер кошелька FkWallet успешно сохранен!**", reply_markup=kb, parse_mode="Markdown")
 
 
-# --- МОДУЛЬ ПЕРЕХВАТА АКТИВНЫХ СДЕЛК ИЗ ЛК ---
+# --- ОБНОВЛЕННЫЙ МОДУЛЬ УПРАВЛЕНИЯ СДЕЛКАМИ И СТАКАНАМИ ---
 @router.callback_query(F.data == "lk_active_deals")
+async def show_active_deals_menu(callback: types.CallbackQuery, state: FSMContext):
+    """Промежуточное меню выбора: Активные сделки или Мои объявления в стакане"""
+    await callback.answer()
+    await state.clear()
+    
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="🤝 Сделки в процессе (с контрагентами)", callback_data="lk_process_deals")],
+        [types.InlineKeyboardButton(text="🗂 Мои объявления в стакане", callback_data="lk_my_offers")],
+        [types.InlineKeyboardButton(text="🔙 Назад в меню", callback_data="open_main_menu")]
+    ])
+    
+    text = (
+        "💼 **Управление вашими ордерами и сделками**\n\n"
+        "• **Сделки в процессе** — обмены, в которых уже участвуют два пользователя (ожидание оплаты, депозита или арбитраж).\n"
+        "• **Мои объявления** — созданные вами заявки, которые сейчас находятся в общем стакане и ждут контрагента. Их можно отменить."
+    )
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "lk_process_deals")
 async def show_active_deals_from_menu(callback: types.CallbackQuery, state: FSMContext, bot: Bot):
+    """Оригинальная логика отображения запущенной сделки из ТЗ"""
     await callback.answer()
     await state.clear()
     tg_id = callback.from_user.id
     
     async with aiosqlite.connect(DB_NAME) as db:
         query = """
-            SELECT id, status, buyer_id, seller_id, guarantor_id 
-            FROM deals 
-            WHERE (buyer_id = ? OR seller_id = ? OR guarantor_id = ?) 
-            AND status IN ('waiting_deposit', 'waiting_payment', 'waiting_delivery', 'dispute')
-            ORDER BY id DESC LIMIT 1
+        SELECT id, status, buyer_id, seller_id, guarantor_id 
+        FROM deals 
+        WHERE (buyer_id = ? OR seller_id = ? OR guarantor_id = ?) 
+        AND status IN ('waiting_deposit', 'waiting_payment', 'waiting_delivery', 'dispute')
+        ORDER BY id DESC LIMIT 1
         """
         async with db.execute(query, (tg_id, tg_id, tg_id)) as cursor:
             active_deal = await cursor.fetchone()
-            
-    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="open_main_menu")]])
+    
+    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[[
+        types.InlineKeyboardButton(text="🔙 Назад", callback_data="lk_active_deals")
+    ]])
     
     if not active_deal:
-        await callback.message.edit_text("📭 **У вас нет active-сделок на данный момент.**", reply_markup=kb_back)
+        await callback.message.edit_text("ℹ️ **У вас нет активных сделок с контрагентами на данный момент.**", reply_markup=kb_back, parse_mode="Markdown")
         return
-
+        
     deal_id, status, buyer_id, seller_id, guarantor_id = active_deal
-    
-    # Передаем явный именованный параметр edit_message_obj=callback для пуленепробиваемой отрисовки без крашей
     from deals.actions import send_deal_interface_to_user
     await send_deal_interface_to_user(bot, tg_id, deal_id, status, buyer_id, seller_id, guarantor_id, edit_message_obj=callback)
+
+
+@router.callback_query(F.data == "lk_my_offers")
+async def show_my_offers(callback: types.CallbackQuery):
+    """Вывод списка активных объявлений пользователя, стоящих в стакане"""
+    await callback.answer()
+    user_id = callback.from_user.id
+    offers = await get_user_active_offers(user_id)
+    
+    kb_back = types.InlineKeyboardMarkup(inline_keyboard=[[
+        types.InlineKeyboardButton(text="🔙 Назад", callback_data="lk_active_deals")
+    ]])
+    
+    if not offers:
+        await callback.message.edit_text("ℹ️ **У вас нет активных объявлений в торговом стакане.**", reply_markup=kb_back, parse_mode="Markdown")
+        return
+
+    keyboard = []
+    for off_id, direction, offer_type, amount, rate in offers:
+        type_str = "🟢 ПОКУПКА" if offer_type == "buy" else "🔴 ПРОДАЖА"
+        dir_title = DIRECTION_TITLES.get(direction, direction)
+        
+        btn_text = f"{type_str} | {dir_title} | {amount}"
+        keyboard.append([types.InlineKeyboardButton(text=btn_text, callback_data=f"view_off:{off_id}")])
+        
+    keyboard.append([types.InlineKeyboardButton(text="🔙 Назад", callback_data="lk_active_deals")])
+    markup = types.InlineKeyboardMarkup(inline_keyboard=keyboard)
+    
+    await callback.message.edit_text("📋 **Ваши активные объявления в стакане.**\nВыберите лот для управления или удаления:", reply_markup=markup, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("view_off:"))
+async def view_single_offer(callback: types.CallbackQuery):
+    """Детальный просмотр параметров объявления перед его удалением"""
+    await callback.answer()
+    offer_id = int(callback.data.split(":"))
+    user_id = callback.from_user.id
+    
+    offers = await get_user_active_offers(user_id)
+    current_offer = next((o for o in offers if o == offer_id), None)
+    
+    if not current_offer:
+        await callback.message.edit_text("❌ Объявление не найдено, удалено или уже принято в работу контрагентом.", 
+                                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                                             types.InlineKeyboardButton(text="🔙 К списку лотов", callback_data="lk_my_offers")
+                                         ]]))
+        return
+        
+    _, direction, offer_type, amount, rate = current_offer
+    type_str = "🟢 Покупка" if offer_type == "buy" else "🔴 Продажа"
+    dir_title = DIRECTION_TITLES.get(direction, direction)
+    
+    text = (
+        f"🔎 **Управление объявлением #{offer_id}**\n\n"
+        f"• **Тип операции**: {type_str}\n"
+        f"• **Направление**: `{dir_title}`\n"
+        f"• **Сумма/Объем**: `{amount}`\n"
+        f"• **Курс/Условия**: `{rate}`\n\n"
+        f"⚠️ При нажатии на кнопку ниже объявление будет безвозвратно удалено из торгового стакана."
+    )
+    
+    markup = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="❌ Отменить и удалить лот", callback_data=f"cancel_off:{offer_id}")],
+        [types.InlineKeyboardButton(text="🔙 Назад к списку", callback_data="lk_my_offers")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=markup, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("cancel_off:"))
+async def process_cancel_offer(callback: types.CallbackQuery):
+    """Обработчик безопасной отмены лота"""
+    offer_id = int(callback.data.split(":"))
+    user_id = callback.from_user.id
+    
+    success = await cancel_user_offer(offer_id, user_id)
+    
+    if success:
+        await callback.answer("✅ Объявление успешно удалено из стакана!", show_alert=True)
+    else:
+        await callback.answer("❌ Ошибка отмены. Возможно, сделку уже принял другой пользователь.", show_alert=True)
+        
+    await show_my_offers(callback)
+
 
