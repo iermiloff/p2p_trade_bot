@@ -138,3 +138,34 @@ async def get_user_title(deals_count: int, rating: float) -> str:
         if deals_count >= title["min_deals"] and rating >= title["min_rating"]:
             return title["name"]
     return "Новичок"
+
+async def get_user_active_offers(tg_id: int) -> list:
+    """Возвращает список всех активных объявлений пользователя из стакана"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        query = """
+        SELECT id, direction, offer_type, amount, rate 
+        FROM offers 
+        WHERE creator_id = ? AND status = 'active'
+        ORDER BY id DESC
+        """
+        async with db.execute(query, (tg_id,)) as cursor:
+            return await cursor.fetchall()
+
+async def cancel_user_offer(offer_id: int, tg_id: int) -> bool:
+    """
+    Безопасно отменяет объявление, проверяя владельца и текущий статус 
+    (защита от одновременных запросов).
+    """
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Проверяем, что объявление всё ещё активно и принадлежит именно этому пользователю
+        check_query = "SELECT id FROM offers WHERE id = ? AND creator_id = ? AND status = 'active'"
+        async with db.execute(check_query, (offer_id, tg_id)) as cursor:
+            offer = await cursor.fetchone()
+            
+        if not offer:
+            return False # Объявление уже кто-то принял или оно было отменено
+            
+        # Меняем статус на отмененный
+        await db.execute("UPDATE offers SET status = 'canceled' WHERE id = ?", (offer_id,))
+        await db.commit()
+        return True
